@@ -1,5 +1,5 @@
 """ 
-A simple, sota-model language model with all the bells and whistles. Just simplified. 
+A simple, SOTA language model with all the bells and whistles. Just simplified. 
 
 Build on top of this however you like. 
 
