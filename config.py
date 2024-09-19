@@ -25,25 +25,11 @@ class ActivationConfig:
 @dataclass
 class ModelConfig:
     d_model: int = 768
-    d_head: int = 64
     n_layers: int = 12
     n_heads: int = 12
     n_kv_heads: Optional[int] = 4
     max_seq_len: int = 2048
-
-@dataclass
-class PicoConfig:
-    model: ModelConfig = ModelConfig()
-    activation: ActivationConfig = ActivationConfig()
-    norm: RMSNormConfig = RMSNormConfig()
-    position_emb: RoPEConfig = RoPEConfig()
-
-
-########################################################
-#
-# Tokenizer Config
-#
-########################################################
+    max_batch_size: int = 1024
 
 @dataclass
 class TokenizerConfig:
@@ -52,6 +38,15 @@ class TokenizerConfig:
     pad_token_id: int = 0
     bos_token_id: int = 1
     eos_token_id: int = 2
+
+@dataclass
+class PicoConfig:
+    model: ModelConfig = ModelConfig()
+    activation: ActivationConfig = ActivationConfig()
+    norm: RMSNormConfig = RMSNormConfig()
+    position_emb: RoPEConfig = RoPEConfig()
+
+    tokenizer: TokenizerConfig = TokenizerConfig()
 
 ########################################################
 #

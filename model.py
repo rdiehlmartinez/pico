@@ -79,34 +79,48 @@ class RoPE(nn.Module):
             e^(theta * i * t) = cos(theta * t) + i * sin(theta * t) [Euler's formula]
         """
         _freqs = 1.0 / (theta ** (torch.arange(0, dim, 2)[: (dim // 2)].float() / dim))
-        t = torch.arange(seq_len,)
-        freqs = torch.outer(t, _freqs)
+        positions = torch.arange(seq_len,)
+        freqs = torch.outer(positions, _freqs)
         return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
-    def get_freqs_cis(self, x: torch.Tensor) -> torch.Tensor:
+    def get_freqs_cis(
+            self, 
+            input_shape: torch.Size, 
+            start_pos: int, 
+            end_pos: int
+        ) -> torch.Tensor:
         """
         Reshapes the frequency tensor to be broadcastable with the input tensor.
         """
-        ndim = x.ndim
+        _freqs_cis = RoPE._freqs_cis[start_pos:end_pos]
+
+        ndim = len(input_shape)
         assert 0 <= 1 < ndim
-        assert RoPE._freqs_cis.shape == (x.shape[1], x.shape[-1])
+        assert _freqs_cis.shape == (input_shape[1], input_shape[-1])
 
         # TODO: Check whether this is correct (might be able to remove this)
-        shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-        return RoPE._freqs_cis.view(*shape)
-    
+        shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(input_shape)]
+        return _freqs_cis.view(*shape)
 
     def apply_rotary_emb(
         self, 
         queries: torch.Tensor,
         keys: torch.Tensor,
+        start_pos: Optional[int] = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """
         Applies the rotary positional embeddings to the input tensors via complex num multiplication
+
+        The start_pos is used to l
         """
         queries_ = torch.view_as_complex(queries.float().reshape(*queries.shape[:-1], -1, 2))
         keys_ = torch.view_as_complex(keys.float().reshape(*keys.shape[:-1], -1, 2))
-        freqs_cis = self.get_freqs_cis(queries)
+
+        input_shape = queries_.shape # same as keys: (batch_size, seq_len, n_heads, head_dim/2) 
+        freqs_start_pos = start_pos
+        freqs_end_pos = freqs_start_pos + queries_.shape[1]
+
+        freqs_cis = self.get_freqs_cis(input_shape, freqs_start_pos, freqs_end_pos)
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
         return queries_rotated.type_as(queries), keys_rotated.type_as(keys)
@@ -127,14 +141,15 @@ class Attention(nn.Module):
         self.max_batch_size = config.model.max_batch_size
         self.max_seq_len = config.model.max_seq_len
 
-        self.head_dim = config.model.d_model // self.n_heads
+        d_model = config.model.d_model
+        self.head_dim = d_model // self.n_heads
 
-        self.n_rep = self.n_local_heads // self.n_kv_heads
+        self.n_rep = self.n_heads // self.n_kv_heads
 
-        self.q_proj = nn.Linear(self.head_dim, self.n_heads * self.head_dim, bias=False)
-        self.k_proj = nn.Linear(self.head_dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.v_proj = nn.Linear(self.head_dim, self.n_kv_heads * self.head_dim, bias=False)
-        self.o_proj = nn.Linear(self.n_heads * self.head_dim, self.head_dim, bias=False)
+        self.q_proj = nn.Linear(d_model, self.n_heads * self.head_dim, bias=False)
+        self.k_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
+        self.v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
+        self.o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
 
         self.rope = RoPE(config)
 
@@ -177,7 +192,10 @@ class Attention(nn.Module):
         _values = _values.view(bsz, seq_len, self.n_kv_heads, self.head_dim)
 
         # apply rotary positional embeddings
-        _queries, _keys = self.rope.apply_rotary_emb(_queries, _keys)
+        if inference_mode:
+            _queries, _keys = self.rope.apply_rotary_emb(_queries, _keys, start_pos)
+        else: 
+            _queries, _keys = self.rope.apply_rotary_emb(_queries, _keys)
 
         if inference_mode and start_pos > 0:
             if self.k_cache is None and self.v_cache is None:
@@ -207,7 +225,7 @@ class Attention(nn.Module):
         scores = F.softmax(scores.float(), dim=-1).type_as(queries)
         output = torch.matmul(scores, values)  # (bs, n_heads, seq_len, head_dim)
         output = output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
-        return self.wo(output)
+        return self.o_proj(output)
 
 ########################################################
 #
@@ -268,7 +286,7 @@ class Pico(nn.Module):
         
         self.layers = nn.ModuleList([PicoBlock(config) for _ in range(self.n_layers)])
 
-        self.output_norm = RMSNorm(config.model.d_model, eps=config.norm.eps)
+        self.output_norm = RMSNorm(config)
 
         # NOTE: the de-embedding projection is not tied to the embedding projection
         self.de_embedding_proj = nn.Linear(config.model.d_model, self.vocab_size, bias=False)
