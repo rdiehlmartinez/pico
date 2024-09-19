@@ -18,6 +18,8 @@ import torch.nn.functional as F
 from config import PicoConfig
 from typing import Tuple, Optional
 
+import lightning as L
+
 ########################################################
 #
 # Layer Normalization 
@@ -53,11 +55,13 @@ class RoPE(nn.Module):
     _freqs_cis: torch.Tensor = None
 
     # TODO: implement config 
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: PicoConfig, fabric: L.Fabric):
         """
         Rotary positional embeddings (RoPE). 
         """
         super().__init__()
+
+        self.fabric = fabric
 
         self.theta = config.position_emb.theta
         self.dim = config.model.d_model // config.model.n_heads
@@ -66,7 +70,8 @@ class RoPE(nn.Module):
 
         # only gets set once, and then reused for all RoPE instances
         if RoPE._freqs_cis is None:
-            RoPE._freqs_cis = self._setup_freqs_cis(max_seq_len, self.theta, self.dim) 
+            RoPE._freqs_cis = fabric.to_device(self._setup_freqs_cis(max_seq_len, self.theta, self.dim)) 
+
 
     @classmethod
     def _setup_freqs_cis(cls, seq_len: int, theta: float, dim: int) -> torch.Tensor:
@@ -132,8 +137,10 @@ class RoPE(nn.Module):
 ########################################################
 
 class Attention(nn.Module):
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: PicoConfig, fabric: L.Fabric):
         super().__init__()
+
+        self.fabric = fabric
 
         self.n_heads = config.model.n_heads
         self.n_kv_heads = config.model.n_kv_heads
@@ -151,7 +158,7 @@ class Attention(nn.Module):
         self.v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
 
-        self.rope = RoPE(config)
+        self.rope = RoPE(config, fabric)
 
         # caches for inference; only used if inference_mode is enabled
         self.k_cache = None
@@ -254,10 +261,10 @@ class SwiGLU(nn.Module):
 ########################################################
 
 class PicoBlock(nn.Module):
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: PicoConfig, fabric: L.Fabric):
         super().__init__()
 
-        self.attention = Attention(config)
+        self.attention = Attention(config, fabric)
         self.feed_forward = SwiGLU(config)
         self.attention_norm = RMSNorm(config)
         self.swiglu_norm = RMSNorm(config)
@@ -275,16 +282,17 @@ class PicoBlock(nn.Module):
 
 class Pico(nn.Module):
 
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: PicoConfig, fabric: L.Fabric):
         super().__init__()
         self.config = config
+        self.fabric = fabric
 
         self.vocab_size = config.tokenizer.vocab_size
         self.n_layers = config.model.n_layers
 
         self.embedding_proj = nn.Embedding(self.vocab_size, config.model.d_model)
         
-        self.layers = nn.ModuleList([PicoBlock(config) for _ in range(self.n_layers)])
+        self.layers = nn.ModuleList([PicoBlock(config, fabric) for _ in range(self.n_layers)])
 
         self.output_norm = RMSNorm(config)
 
@@ -303,7 +311,7 @@ class Pico(nn.Module):
 
         mask = None
         if seq_len > 1:
-            mask = torch.full((seq_len, seq_len), float("-inf"))
+            mask = self.fabric.to_device(torch.full((seq_len, seq_len), float("-inf")))
             mask = torch.triu(mask, diagonal=1)
 
             if inference_mode:
