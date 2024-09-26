@@ -48,6 +48,70 @@ class PicoConfig:
 
     tokenizer: TokenizerConfig = TokenizerConfig()
 
+
+########################################################
+#
+# Training Configs
+#
+########################################################
+
+@dataclass
+class FabricConfig:
+    num_nodes: int = 1
+    num_devices: int = 1
+    precision: str = "16-mixed"
+    accelerator: str = "cuda"
+
+@dataclass
+class OptimizationConfig:
+    # Optimizer
+    optimizer: str = "adamw"
+    lr: float = 1e-5
+
+    # Learning Rate Scheduler
+    lr_scheduler: str = "cosine"
+    lr_warmup_steps: int = 1000
+    weight_decay: float = 0.1
+
+    # Gradient Accumulation
+    gradient_accumulation_steps: int = 1
+
+@dataclass
+class LoggingConfig:
+    wandb_project: str = "pico"
+    wandb_entity: str = "pico"
+
+    log_every_n_steps: int = 10
+
+@dataclass
+class CheckpointConfig:
+    save_every_n_steps: int = 1000
+    save_path: str = "checkpoints"
+
+    # Path to load a checkpoint from
+    load_path: Optional[str] = None
+
+@dataclass
+class TrainingConfig:
+    fabric: FabricConfig = FabricConfig()
+    optimization: OptimizationConfig = OptimizationConfig()
+    logging: LoggingConfig = LoggingConfig()
+    checkpointing: CheckpointConfig = CheckpointConfig()
+    strategy: str = "deepspeed"
+
+
+########################################################
+#
+# Evaluation Configs
+#
+########################################################
+
+@dataclass
+class EvaluationConfig:
+    eval_every_n_steps: int = 1000
+    eval_batch_size: int = 1024
+    
+
 ########################################################
 #
 # Helper Functions
