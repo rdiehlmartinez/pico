@@ -73,32 +73,38 @@ class OptimizationConfig:
     lr_warmup_steps: int = 1000
     weight_decay: float = 0.1
 
+    # Gradient Clipping
+    max_norm: float = 1.0
+
     # Gradient Accumulation
     gradient_accumulation_steps: int = 1
 
 @dataclass
 class LoggingConfig:
-    wandb_project: str = "pico"
-    wandb_entity: str = "pico"
+    logger: Optional[str] = "wandb"
+    wandb_project: Optional[str] = "pico"
+    wandb_entity: Optional[str] = "pico"
 
     log_every_n_steps: int = 10
 
 @dataclass
 class CheckpointConfig:
-    save_every_n_steps: int = 1000
-    save_path: str = "checkpoints"
+    save_every_n_steps: int = 20
 
     # Path to load a checkpoint from
-    load_path: Optional[str] = None
+    load_checkpoint_path: Optional[str] = None
 
 @dataclass
 class TrainingConfig:
+    run_name: Optional[str] = None
+
     fabric: FabricConfig = FabricConfig()
     optimization: OptimizationConfig = OptimizationConfig()
     logging: LoggingConfig = LoggingConfig()
     checkpointing: CheckpointConfig = CheckpointConfig()
-    strategy: str = "deepspeed"
 
+    strategy: str = "deepspeed"
+    training_steps: int = 100
 
 ########################################################
 #
