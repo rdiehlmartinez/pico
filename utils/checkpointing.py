@@ -37,9 +37,23 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
     fabric.save(checkpoint_path, state)
 
     # create symlink to latest checkpoint
-    latest_path = os.path.join(run_dir, CHECKPOINT_DIR, "latest.ckpt")
-    os.symlink(checkpoint_path, latest_path)
+    # if latest.ckpt exists, remove it 
+    latest_symlink_path = os.path.join(run_dir, CHECKPOINT_DIR, "latest.ckpt")
+    if os.path.lexists(latest_symlink_path):
+        print(f"Removing existing latest.ckpt at {latest_symlink_path}")
+        os.remove(latest_symlink_path)
+    else:
+        print(f"Creating symlink to {checkpoint_path} at {latest_symlink_path}")
+        print("symbolic link does not exist")
 
+    os.symlink(checkpoint_path, latest_symlink_path)
+    
+    # push to HuggingFace Hub
+    if training_config.checkpointing.hf_repo_id is not None:
+        commit_message = f"Model Save -- Step {step}"
+        fabric.print(f"Saving checkpoint to HuggingFace Hub at {training_config.checkpointing.hf_repo_id}")
+        fabric.print(f"Commit Message: {commit_message}")
+        # TODO: Push to HuggingFace Hub
 
 def save_config(training_config, model_config, evaluation_config):
     """

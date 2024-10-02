@@ -107,16 +107,31 @@ def initialize_optimizer(model, config):
     return optimizer
  
 
-def initialize_lr_scheduler(optimizer, config):
+def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
     """
     Initialize the learning rate scheduler with the given config. 
     """
 
-    if config.optimization.lr_scheduler == "cosine":
-        lr_scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(
-            optimizer, T_max=config.optimization.lr_scheduler_T_max
+    if training_config.optimization.lr_scheduler == "linear_with_warmup":
+
+        # Credit where credit is due: 
+        # https://github.com/huggingface/transformers/blob/e71a01a104dd663c730e494eb0b6467bb51df357/src/transformers/optimization.py#L102
+        def _lr_lambda(curr_step, num_warmup_steps, num_training_steps):
+            if curr_step < num_warmup_steps: 
+                return float(curr_step) / float(max(1, num_warmup_steps))
+            else: 
+                return max(0.0, float(num_training_steps - curr_step) / float(max(1, num_training_steps - num_warmup_steps)))
+
+        lr_lambda = lambda step: _lr_lambda(
+            step, 
+            training_config.optimization.lr_warmup_steps, 
+            training_config.training_steps
+        )
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer, 
+            lr_lambda, 
         )
     else:
-        raise ValueError(f"Invalid learning rate scheduler: {config.optimization.lr_scheduler}")
+        raise ValueError(f"Invalid learning rate scheduler: {training_config.optimization.lr_scheduler}")
 
     return lr_scheduler

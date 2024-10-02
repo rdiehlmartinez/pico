@@ -69,9 +69,8 @@ class OptimizationConfig:
     lr: float = 1e-5
 
     # Learning Rate Scheduler
-    lr_scheduler: str = "cosine"
-    lr_warmup_steps: int = 1000
-    weight_decay: float = 0.1
+    lr_scheduler: str = "linear_with_warmup" 
+    lr_warmup_steps: int = 20
 
     # Gradient Clipping
     max_norm: float = 1.0
@@ -83,7 +82,7 @@ class OptimizationConfig:
 class LoggingConfig:
     logger: Optional[str] = "wandb"
     wandb_project: Optional[str] = "pico"
-    wandb_entity: Optional[str] = "pico"
+    wandb_entity: Optional[str] = "pico-lm"
 
     log_every_n_steps: int = 10
 
@@ -93,6 +92,11 @@ class CheckpointConfig:
 
     # Path to load a checkpoint from
     load_checkpoint_path: Optional[str] = None
+
+    # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
+    # Should be in the format of <(username or organization)>/<repo_name>
+    # e.g. pico-lm/pico-7b
+    hf_repo_id: Optional[str] = None
 
 @dataclass
 class TrainingConfig:
@@ -114,7 +118,7 @@ class TrainingConfig:
 
 @dataclass
 class EvaluationConfig:
-    eval_every_n_steps: int = 1000
+    eval_every_n_steps: int = 100
     eval_batch_size: int = 1024
     
 
