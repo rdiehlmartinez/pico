@@ -1,7 +1,9 @@
 import click
+import logging
 import lightning as L
 import torch
 import torch.nn.functional as F
+from lightning.fabric.utilities.rank_zero import rank_zero_only
 
 from model import Pico
 
@@ -12,7 +14,7 @@ from utils.initialization import (
     initialize_run_dir, 
     initialize_fabric, 
     initialize_config, 
-    initialize_logger,
+    initialize_logging,
     initialize_optimizer, 
     initialize_lr_scheduler
 )
@@ -51,10 +53,12 @@ def main(model_config_override, training_config_override, evaluation_config_over
     initialize_run_dir(training_config)
 
     # ---- Setup Logger ---- #
-    logger = initialize_logger(training_config)
+    logger, experiment_tracker = initialize_logging(training_config)
+    @rank_zero_only
+    def log(msg, level=logging.INFO): logger.log(level, msg)
 
     # ---- Setup Fabric ---- #
-    fabric = initialize_fabric(training_config, logger)
+    fabric = initialize_fabric(training_config, experiment_tracker)
 
     # ---- Setup Dataset, Tokenizer, and Dataloader ---- #
     dataset = WikiText2()
@@ -74,7 +78,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
         model, optimizer, lr_scheduler, train_start_step = load_checkpoint(
             fabric, training_config, model, optimizer, lr_scheduler
         )
-        fabric.print(f"Loaded checkpoint from {training_config.checkpointing.load_path}")
+        log(f"Loaded checkpoint from {training_config.checkpointing.load_path}")
 
         # NOTE:Fast Forward the dataloader to the start step
         for _ in range(train_start_step):
@@ -82,12 +86,11 @@ def main(model_config_override, training_config_override, evaluation_config_over
     else:
         L.seed_everything(42)
         train_start_step = 0
-        fabric.print("Training from scratch!")
+        log("Training from scratch!")
 
         save_config(training_config, model_config, evaluation_config)
         save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, 0)
-        fabric.print("Saved initial model state (step 0)")
-
+        log("Saved initial model state (step 0)")
 
     ########################################################
     #
@@ -96,7 +99,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
     ########################################################
 
     if train_start_step < training_config.training_steps:
-        fabric.print(f"Training from step {train_start_step}")
+        log(f"Training from step {train_start_step}")
 
     gradient_step = train_start_step
     # Loss tracking over log_every_n_steps interval 
@@ -147,7 +150,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
             fabric.log("loss", avg_loss, step=gradient_step)
             fabric.log("inf_or_nan_count", gathered_interval_inf_or_nan_count, step=gradient_step)
             fabric.log("learning_rate", lr_scheduler.get_last_lr()[0], step=gradient_step)
-            fabric.print(f"Step {gradient_step} Loss: {avg_loss}")
+            log(f"Step {gradient_step} Loss: {avg_loss}")
 
         # ---- Checkpointing ---- #
 
@@ -157,7 +160,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
 
         # --- Evaluation --- #
         if gradient_step % evaluation_config.eval_every_n_steps == 0:
-            fabric.print("Starting Evaluation!")
+            log("Starting Evaluation!")
 
         # --- Break Training Condition --- #
         if gradient_step == training_config.training_steps:
@@ -167,7 +170,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
             break
 
     # --- Final Evaluation --- #
-    fabric.print("Starting Final Evaluation!")
+    log("Starting Final Evaluation!")
 
 if __name__ == "__main__":
     main()

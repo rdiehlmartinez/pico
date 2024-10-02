@@ -4,8 +4,10 @@ import yaml
 import lightning as L
 import torch
 import os
+import logging
 from datetime import datetime
 from wandb.integration.lightning.fabric import WandbLogger
+
 
 from typing import Optional
 from config import PicoConfig, TrainingConfig, EvaluationConfig
@@ -13,64 +15,11 @@ from lightning.fabric.loggers import Logger as FabricLogger
 
 from . import ROOT_DIR
 
-
-def initialize_run_dir(training_config: TrainingConfig):
-    """
-    Initialize the run directory with the given config. 
-    """
-
-    run_name = training_config.run_name
-    if run_name is None:
-        run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        training_config.run_name = run_name
-
-    run_dir = os.path.join(ROOT_DIR, run_name)
-
-    os.makedirs(run_dir, exist_ok=True)
-
-
-def initialize_fabric(training_config: TrainingConfig, logger: Optional[FabricLogger] = None):
-    """
-    Setup the lightning fabric with the given config. 
-    """
-
-    fabric = L.Fabric(
-        accelerator=training_config.fabric.accelerator,
-        precision=training_config.fabric.precision,
-        devices=training_config.fabric.num_devices,
-        num_nodes=training_config.fabric.num_nodes,
-        loggers=logger
-    )
-
-    fabric.launch()
-
-    return fabric
-
-def initialize_logger(config):
-    """
-    Initialize the logger with the given config. 
-    """
-
-    if config.logging.logger is None:
-        return None
-
-    loggers = []
-
-    if config.logging.logger == "wandb":
-        assert config.logging.wandb_project is not None, \
-            "Wandb project must be provided if wandb is to be used."
-        assert config.logging.wandb_entity is not None, \
-            "Wandb entity must be provided if wandb is to be used."
-        loggers.append( 
-            WandbLogger(
-                project=config.logging.wandb_project,
-                entity=config.logging.wandb_entity
-            )
-        )
-    else:
-        raise ValueError(f"Invalid logger: {config.logging.logger}")
-
-    return loggers
+########################################################
+#
+# Basic Initialization
+#
+########################################################
 
 def initialize_config(config_override, config_type):
     """
@@ -93,16 +42,121 @@ def initialize_config(config_override, config_type):
 
     return config
 
+def initialize_run_dir(training_config: TrainingConfig):
+    """
+    Initialize the run directory with the given config. 
+    """
 
-def initialize_optimizer(model, config):
+    run_name = training_config.run_name
+    if run_name is None:
+        run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+        training_config.run_name = run_name
+
+    run_dir = os.path.join(ROOT_DIR, run_name)
+
+    os.makedirs(run_dir, exist_ok=True)
+
+def initialize_fabric(training_config: TrainingConfig, experiment_tracker: Optional[FabricLogger] = None):
+    """
+    Setup the lightning fabric with the given config. 
+    """
+
+    fabric = L.Fabric(
+        accelerator=training_config.fabric.accelerator,
+        precision=training_config.fabric.precision,
+        devices=training_config.fabric.num_devices,
+        num_nodes=training_config.fabric.num_nodes,
+        loggers=[experiment_tracker]
+    )
+
+    fabric.launch()
+
+    return fabric
+
+########################################################
+#
+# Logging
+#
+########################################################
+
+def _initialize_log_file(training_config: TrainingConfig) -> str:
+    """
+    Create a log file in the run directory.
+   """
+    run_dir = os.path.join(ROOT_DIR, training_config.run_name)
+    logs_dir = os.path.join(run_dir, "logs")
+    os.makedirs(logs_dir, exist_ok=True)
+    
+    # datetime stamp
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file_name = f"log_{timestamp}.txt"
+    log_file_path = os.path.join(logs_dir, log_file_name)
+    
+    open(log_file_path, 'w').close() # Create an empty log file
+    
+    return log_file_path
+
+def initialize_logging(training_config: TrainingConfig):
+    """
+    Initialize the logging functionality. A standard file and congole logger is initialized by default. 
+
+    If experiment trackers (wandb, etc.) are specified in the config, those loggers are initialized. 
+    """
+    # Create a logger
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Create file handler
+    log_file_path = _initialize_log_file(training_config)
+    file_handler = logging.FileHandler(log_file_path)
+    file_handler.setLevel(logging.INFO)
+
+    # Create formatter and add it to the handler
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    # Add the handler to the logger
+    logger.addHandler(file_handler)
+
+    # Add a stream handler for console output
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(logging.INFO)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    # ---- Third Party Loggers ----
+
+    experiment_tracker = None
+    # Initialize third-party loggers 
+    if training_config.logging.experiment_tracker == "wandb":
+        assert training_config.logging.wandb_project is not None, \
+            "Wandb project must be provided if wandb is to be used."
+        assert training_config.logging.wandb_entity is not None, \
+            "Wandb entity must be provided if wandb is to be used."
+        experiment_tracker = WandbLogger(
+            project=training_config.logging.wandb_project,
+            entity=training_config.logging.wandb_entity
+        )
+    elif training_config.logging.experiment_tracker != "" or training_config.logging.experiment_tracker is not None:
+        raise ValueError(f"Invalid experiment tracker: {training_config.logging.experiment_tracker}")
+
+    return logger, experiment_tracker
+
+########################################################
+#
+# Optimizer and Scheduler
+#
+########################################################
+
+def initialize_optimizer(model, training_config: TrainingConfig):
     """
     Initialize the optimizer with the given config. 
     """
 
-    if config.optimization.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(model.parameters(), lr=config.optimization.lr)
+    if training_config.optimization.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(model.parameters(), lr=training_config.optimization.lr)
     else:
-        raise ValueError(f"Invalid optimizer: {config.optimization.optimizer}")
+        raise ValueError(f"Invalid optimizer: {training_config.optimization.optimizer}")
 
     return optimizer
  

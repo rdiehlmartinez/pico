@@ -59,7 +59,7 @@ def login_checks(training_config: TrainingConfig) -> None:
     the specified organization or entity. 
     """
     # Weights & Biases 
-    if training_config.logging.logger == "wandb":
+    if training_config.logging.experiment_tracker == "wandb":
         assert is_logged_into_wandb(training_config), "Please login to Weights & Biases to continue!"
 
     # HuggingFace 

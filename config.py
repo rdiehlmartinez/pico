@@ -80,7 +80,7 @@ class OptimizationConfig:
 
 @dataclass
 class LoggingConfig:
-    logger: Optional[str] = "wandb"
+    experiment_tracker: Optional[str] = "wandb"
     wandb_project: Optional[str] = "pico"
     wandb_entity: Optional[str] = "pico-lm"
 
@@ -94,7 +94,7 @@ class CheckpointConfig:
     load_checkpoint_path: Optional[str] = None
 
     # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
-    # Should be in the format of <(username or organization)>/<repo_name>
+    # Should be in the format of <(username or )>/<repo_name>
     # e.g. pico-lm/pico-7b
     hf_repo_id: Optional[str] = None
 
