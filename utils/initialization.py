@@ -13,7 +13,7 @@ from typing import Optional
 from config import PicoConfig, TrainingConfig, EvaluationConfig
 from lightning.fabric.loggers import Logger as FabricLogger
 
-from . import ROOT_DIR
+from . import ROOT_DIR, CHECKPOINT_DIR
 
 ########################################################
 #
@@ -125,9 +125,9 @@ def initialize_logging(training_config: TrainingConfig):
     logger.addHandler(stream_handler)
 
     # ---- Third Party Loggers ----
+    # NOTE: add other experiment trackers here that you want to use
 
     experiment_tracker = None
-    # Initialize third-party loggers 
     if training_config.logging.experiment_tracker == "wandb":
         assert training_config.logging.wandb_project is not None, \
             "Wandb project must be provided if wandb is to be used."
@@ -141,6 +141,67 @@ def initialize_logging(training_config: TrainingConfig):
         raise ValueError(f"Invalid experiment tracker: {training_config.logging.experiment_tracker}")
 
     return logger, experiment_tracker
+    
+
+########################################################
+#
+# Checkpointing
+#
+########################################################k
+
+def initialize_checkpointing(training_config: TrainingConfig):
+    """
+    Initialize any checkpointing functionality. The main thing right now is setting up 
+    HuggingFace repos for storing model checkpoints, but this could be extended to other 
+    checkpointing backends in the future.j 
+    """
+
+    huggingface_repo_id = training_config.checkpointing.hf_repo_id
+    if huggingface_repo_id is None:
+        return 
+
+    import time 
+    from huggingface_hub.hf_api import create_repo, create_branch
+    from huggingface_hub.errors import HfHubHTTPError
+    from huggingface_hub.repository import Repository
+
+    run_dir = os.path.join(ROOT_DIR, training_config.run_name)
+    checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
+
+    _repo_sleep_time = 1
+    _repo_created = False
+    while not _repo_created:
+        try:
+            # Make sure the repo exists.
+            create_repo(
+                huggingface_repo_id,
+                exist_ok=True,
+            )
+            _repo_created = True
+        except HfHubHTTPError:
+            if _repo_sleep_time > 64:
+                raise RuntimeError(
+                    f"Could not create huggingface repo {huggingface_repo_id} after {64} seconds."
+                )
+            time.sleep(_repo_sleep_time)
+            _repo_sleep_time *= 2
+
+    # create branch 
+    create_branch(repo_id=huggingface_repo_id, branch=training_config.run_name, exists_ok=True)
+
+    repo = Repository(
+        checkpoint_dir,
+        clone_from=huggingface_repo_id,
+        revision=training_config.run_name,
+    )
+
+    try:
+        # the branch name should have been created already by the `create_repo` call
+        repo.git_pull()
+    except OSError:
+        # if the repo is empty, the git_pull will fail
+        pass
+
 
 ########################################################
 #

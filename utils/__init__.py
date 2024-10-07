@@ -8,22 +8,17 @@ def is_logged_into_huggingface(training_config: TrainingConfig) -> bool:
     # check that the user has write access to https://huggingface.co/pico-lm
     from huggingface_hub import HfApi
 
-    # Get the token from the environment or the cache
-    token = HfApi().get_token()
-    if not token:
-        raise ValueError("No HuggingFace token found. You might need to run ./setup.sh or set the HF_TOKEN environment variable.")
-
     target_org = training_config.checkpointing.hf_repo_id.split("/")[0]
         
-    api = HfApi(token=token)
+    api = HfApi()
     who_ami = api.whoami()
 
     # check if who_ami has access to org pico-lm
     orgs = who_ami.get('orgs', []) + [who_ami['name']]
 
     for org in orgs:
-        if org['id'] == target_org:
-            if org['role'] not in ['admin', 'write']:
+        if org['name'] == target_org:
+            if org['roleInOrg'] not in ['admin', 'write']:
                 raise ValueError(f"You don't have write access to the {target_org} organization on HuggingFace.")
             else:
                 return True
@@ -33,7 +28,13 @@ def is_logged_into_huggingface(training_config: TrainingConfig) -> bool:
         return True
 
     raise ValueError(
-        f"You don't have access to the {target_org} organization on HuggingFace or the organization does not exist."
+        f"""Something went wrong with your HuggingFace login. 
+        Either: 
+        1. You don't have access to the {target_org} organization on HuggingFace or 
+        2. The organization does not exist.
+        3. You forgot to set the HF_TOKEN environment variable.
+        Please check your HuggingFace credentials and try again.
+        """
     )
 
 def is_logged_into_wandb(training_config: TrainingConfig) -> bool:

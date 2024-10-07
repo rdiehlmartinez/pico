@@ -16,7 +16,8 @@ from utils.initialization import (
     initialize_config, 
     initialize_logging,
     initialize_optimizer, 
-    initialize_lr_scheduler
+    initialize_lr_scheduler, 
+    initialize_checkpointing
 )
 from utils.checkpointing import (
     load_checkpoint, 
@@ -74,6 +75,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     # ---- Load Checkpoint (if specified) ---- #
+    initialize_checkpointing(training_config)
     if training_config.checkpointing.load_checkpoint_path:
         model, optimizer, lr_scheduler, train_start_step = load_checkpoint(
             fabric, training_config, model, optimizer, lr_scheduler
@@ -156,6 +158,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
 
         # Maybe save checkpoint 
         if gradient_step % training_config.checkpointing.save_every_n_steps == 0:
+            log(f"Saving checkpoint at step {gradient_step}")
             save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, gradient_step)
 
         # --- Evaluation --- #
@@ -166,6 +169,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
         if gradient_step == training_config.training_steps:
             # Save final checkpoint if we didn't save it at already 
             if gradient_step % training_config.checkpointing.save_every_n_steps != 0:
+                log(f"Saving final checkpoint at step {gradient_step}")
                 save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, gradient_step)
             break
 

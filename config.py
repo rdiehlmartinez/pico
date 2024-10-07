@@ -96,7 +96,9 @@ class CheckpointConfig:
     # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
     # Should be in the format of <(username or )>/<repo_name>
     # e.g. pico-lm/pico-7b
-    hf_repo_id: Optional[str] = None
+    # hf_repo_id: Optional[str] = None
+    hf_repo_id: Optional[str] = "pico-lm/demo"
+
 
 @dataclass
 class TrainingConfig:
@@ -104,6 +106,7 @@ class TrainingConfig:
 
     fabric: FabricConfig = FabricConfig()
     optimization: OptimizationConfig = OptimizationConfig()
+
     logging: LoggingConfig = LoggingConfig()
     checkpointing: CheckpointConfig = CheckpointConfig()
 
