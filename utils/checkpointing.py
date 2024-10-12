@@ -84,6 +84,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
             repo_id=training_config.checkpointing.hf_repo_id,
             commit_message=f"Saving run config",
             revision=training_config.run_name,
+            token=os.getenv("HF_TOKEN"),
         )
 
     # Pushing to HuggingFace Hub
@@ -94,6 +95,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
             repo_id=training_config.checkpointing.hf_repo_id,
             commit_message=f"Model Save -- Step {step}",
             revision=training_config.run_name,
+            token=os.getenv("HF_TOKEN"),
         )
 
         # uploading logs to HuggingFace Hub
@@ -103,6 +105,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
             repo_id=training_config.checkpointing.hf_repo_id,
             commit_message=f"Saving logs",
             revision=training_config.run_name,
+            token=os.getenv("HF_TOKEN"),
         )
 
     fabric.barrier()

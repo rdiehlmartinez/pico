@@ -1,3 +1,2 @@
 git-lfs install
-huggingface-cli login
-wandb login
+source .env # (possibly) load the HF_TOKEN and WANDB_API_KEY environment variables
