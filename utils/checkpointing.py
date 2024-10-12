@@ -1,7 +1,7 @@
 
 import os 
 import yaml
-from huggingface_hub import upload_folder
+from huggingface_hub import upload_folder, upload_file
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 
 from . import ROOT_DIR, CHECKPOINT_DIR
@@ -36,6 +36,10 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
     """
     Save a checkpoint to the specified path.
     """
+
+    if fabric.global_rank != 0:
+        fabric.barrier()
+        return
 
     run_dir = os.path.join(ROOT_DIR, training_config.run_name)
     root_checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
@@ -72,28 +76,49 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
 
     os.symlink(curr_checkpoint_dir, latest_symlink_path)
     
-    # Pushing to HuggingFace Hub
-    if training_config.checkpointing.hf_repo_id is not None:
-        commit_message = f"Model Save -- Step {step}"
-        print(f'folder_path: {curr_checkpoint_dir}')
-        print(f'repo_id: {training_config.checkpointing.hf_repo_id}')
-        print(f'commit_message: {commit_message}')
-        print(f'revision: {training_config.run_name}')
-        upload_folder(
-            folder_path=curr_checkpoint_dir,
+    if step == 0:
+        # upload the config to the HuggingFace Hub
+        upload_file(
+            path_or_fileobj=os.path.join(run_dir, "config.yaml"),
+            path_in_repo="config.yaml",
             repo_id=training_config.checkpointing.hf_repo_id,
-            commit_message=commit_message,
+            commit_message=f"Saving run config",
             revision=training_config.run_name,
         )
 
+    # Pushing to HuggingFace Hub
+    if training_config.checkpointing.hf_repo_id is not None:
+        # uploading models and optimizer to HuggingFace Hub
+        upload_folder(
+            folder_path=curr_checkpoint_dir,
+            repo_id=training_config.checkpointing.hf_repo_id,
+            commit_message=f"Model Save -- Step {step}",
+            revision=training_config.run_name,
+        )
 
-def save_config(training_config, model_config, evaluation_config):
+        # uploading logs to HuggingFace Hub
+        upload_folder(
+            folder_path=os.path.join(run_dir, "logs"),
+            path_in_repo="logs",
+            repo_id=training_config.checkpointing.hf_repo_id,
+            commit_message=f"Saving logs",
+            revision=training_config.run_name,
+        )
+
+    fabric.barrier()
+
+def save_config(fabric, training_config, model_config, evaluation_config):
     """
     Save the config to a file.
     """
+    if fabric.global_rank != 0:
+        fabric.barrier()
+        return
 
     config_path = os.path.join(ROOT_DIR, training_config.run_name, "config.yaml")
     with open(config_path, "w") as f:
         yaml.dump(training_config, f)
         yaml.dump(model_config, f)
         yaml.dump(evaluation_config, f)
+
+    fabric.barrier()

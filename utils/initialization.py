@@ -187,7 +187,7 @@ def initialize_checkpointing(training_config: TrainingConfig):
             _repo_sleep_time *= 2
 
     # create branch 
-    create_branch(repo_id=huggingface_repo_id, branch=training_config.run_name, exists_ok=True)
+    create_branch(repo_id=huggingface_repo_id, branch=training_config.run_name, exist_ok=True)
 
     repo = Repository(
         checkpoint_dir,

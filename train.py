@@ -71,9 +71,6 @@ def main(model_config_override, training_config_override, evaluation_config_over
     optimizer = initialize_optimizer(model, training_config)
     lr_scheduler = initialize_lr_scheduler(optimizer, training_config)
 
-    model, optimizer = fabric.setup(model, optimizer)
-    train_dataloader = fabric.setup_dataloaders(train_dataloader)
-
     # ---- Load Checkpoint (if specified) ---- #
     initialize_checkpointing(training_config)
     if training_config.checkpointing.load_checkpoint_path:
@@ -90,9 +87,14 @@ def main(model_config_override, training_config_override, evaluation_config_over
         train_start_step = 0
         log("Training from scratch!")
 
-        save_config(training_config, model_config, evaluation_config)
+        save_config(fabric, training_config, model_config, evaluation_config)
         save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, 0)
         log("Saved initial model state (step 0)")
+
+    # --- Wrapping with Fabric --- #
+
+    model, optimizer = fabric.setup(model, optimizer)
+    train_dataloader = fabric.setup_dataloaders(train_dataloader)
 
     ########################################################
     #
