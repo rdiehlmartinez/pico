@@ -131,27 +131,29 @@ class EvaluationConfig:
 #
 ########################################################
  
+def update_config_from_yaml(config: PicoConfig | TrainingConfig | EvaluationConfig, yaml_path: str) -> PicoConfig | TrainingConfig | EvaluationConfig:
+    """
+    Update the config object with the values in the given yaml file.
+    NOTE: we don't check for unknown parameters.
+    """
 
-def update_config_from_yaml(config: PicoConfig, yaml_path: str) -> PicoConfig:
     with open(yaml_path, 'r') as f:
         updates = yaml.safe_load(f)
-    
+
     unknown_params = []
-    for key, value in updates.items():
-        parts = key.split('.')
-        obj = config
-        for part in parts[:-1]:
-            if not hasattr(obj, part):
-                unknown_params.append(key)
-                break
-            obj = getattr(obj, part)
-        else:
-            if hasattr(obj, parts[-1]):
-                setattr(obj, parts[-1], value)
+
+    def _update_config_recursively(config, updates):
+        for key, value in updates.items():
+            if isinstance(value, dict):
+                _update_config_recursively(getattr(config, key), value)
+            elif hasattr(config, key):
+                setattr(config, key, value)
             else:
                 unknown_params.append(key)
-    
+
+    _update_config_recursively(config, updates)
+
     if unknown_params:
-        print(f"Warning: Unknown parameters in YAML: {', '.join(unknown_params)}")
-    
+        raise ValueError(f"Overriding parameters not specified in the config: {unknown_params}")
+
     return config
