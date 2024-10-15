@@ -28,10 +28,10 @@ from utils.checkpointing import (
 from utils import login_checks
 
 @click.command()
-@click.option("--model_config_override", type=str, default="") #optional 
-@click.option("--training_config_override", type=str, default="") #optional 
-@click.option("--evaluation_config_override", type=str, default="") #optional 
-def main(model_config_override, training_config_override, evaluation_config_override):
+@click.option("--model_config_override_path", type=str, default="") #optional 
+@click.option("--training_config_override_path", type=str, default="") #optional 
+@click.option("--evaluation_config_override_path", type=str, default="") #optional 
+def main(model_config_override_path, training_config_override_path, evaluation_config_override_path):
     """
     Core Training Loop. 
     """
@@ -43,9 +43,9 @@ def main(model_config_override, training_config_override, evaluation_config_over
     ########################################################
 
     # ---- Setup Configs ---- #
-    model_config = initialize_config(model_config_override, "model")
-    training_config = initialize_config(training_config_override, "training")
-    evaluation_config = initialize_config(evaluation_config_override, "evaluation")
+    model_config = initialize_config(model_config_override_path, "model")
+    training_config = initialize_config(training_config_override_path, "training")
+    evaluation_config = initialize_config(evaluation_config_override_path, "evaluation")
 
     # Check that the user is logged into HuggingFace and Weights & Biases (if specified)
     login_checks(training_config)
@@ -71,30 +71,24 @@ def main(model_config_override, training_config_override, evaluation_config_over
     optimizer = initialize_optimizer(model, training_config)
     lr_scheduler = initialize_lr_scheduler(optimizer, training_config)
 
-    # ---- Load Checkpoint (if specified) ---- #
-    initialize_checkpointing(training_config)
-    if training_config.checkpointing.load_checkpoint_path:
-        model, optimizer, lr_scheduler, train_start_step = load_checkpoint(
-            fabric, training_config, model, optimizer, lr_scheduler
-        )
-        log(f"Loaded checkpoint from {training_config.checkpointing.load_path}")
-
-        # NOTE:Fast Forward the dataloader to the start step
-        for _ in range(train_start_step):
-            next(iter(train_dataloader))
-    else:
-        L.seed_everything(42)
-        train_start_step = 0
-        log("Training from scratch!")
-
-        save_config(fabric, training_config, model_config, evaluation_config)
-        save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, 0)
-        log("Saved initial model state (step 0)")
-
-    # --- Wrapping with Fabric --- #
-
+    # ---- Wrapping with Fabric ---- #
     model, optimizer = fabric.setup(model, optimizer)
     train_dataloader = fabric.setup_dataloaders(train_dataloader)
+
+    # ---- Load Checkpoint (if specified) ---- #
+    initialize_checkpointing(training_config)
+    L.seed_everything(42)
+
+    if training_config.checkpointing.load_checkpoint_path:
+        model, optimizer, lr_scheduler, train_start_step, train_iterator = load_checkpoint(
+            fabric, training_config, model, optimizer, lr_scheduler, train_dataloader
+        )
+        log(f"Loaded checkpoint from {training_config.checkpointing.load_checkpoint_path}")
+    else:
+        train_start_step = 0
+        train_iterator = iter(train_dataloader)
+        save_config(fabric, training_config, model_config, evaluation_config)
+        save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, 0)
 
     ########################################################
     #
@@ -108,9 +102,10 @@ def main(model_config_override, training_config_override, evaluation_config_over
     gradient_step = train_start_step
     # Loss tracking over log_every_n_steps interval 
     interval_loss = torch.tensor(0.0, device=fabric.device)
+    interval_steps = torch.tensor(0, device=fabric.device)
     interval_inf_or_nan_count = torch.tensor(0, device=fabric.device)
 
-    for batch_idx, batch in enumerate(train_dataloader, start=train_start_step):
+    for batch_idx, batch in enumerate(train_iterator, start=train_start_step):
         input_ids, labels = batch
         model_output = model(input_ids).transpose(1, 2)
 
@@ -126,10 +121,34 @@ def main(model_config_override, training_config_override, evaluation_config_over
                 interval_inf_or_nan_count += 1
             else:
                 interval_loss += loss.item()
+                interval_steps += 1
 
         if should_accumulate_gradients:
             continue
+
+        # NOTE: Code after this point only runs after gradient_accumulation_steps
     
+        # ---- Logging ---- #
+
+        if gradient_step % training_config.logging.log_every_n_steps == 0:
+            gathered_interval_loss = fabric.all_reduce(interval_loss, reduce_op="sum").item()
+            gathered_interval_inf_or_nan_count = fabric.all_reduce(interval_inf_or_nan_count, reduce_op="sum").item()
+            gathered_interval_steps = fabric.all_reduce(interval_steps, reduce_op="sum").item()
+            
+            if gathered_interval_steps > 0:
+                avg_loss = gathered_interval_loss / gathered_interval_steps
+            else:
+                avg_loss = float('inf')  # or some other appropriate value
+
+            interval_loss = torch.tensor(0.0, device=fabric.device)
+            interval_steps = torch.tensor(0, device=fabric.device)
+            interval_inf_or_nan_count = torch.tensor(0, device=fabric.device)
+
+            fabric.log("loss", avg_loss, step=gradient_step)
+            fabric.log("inf_or_nan_count", gathered_interval_inf_or_nan_count, step=gradient_step)
+            fabric.log("learning_rate", lr_scheduler.get_last_lr()[0], step=gradient_step)
+            log(f"Step {gradient_step} Loss: {avg_loss}, Inf/NaN count: {gathered_interval_inf_or_nan_count}")
+
         # ---- Gradient Step ---- #
 
         fabric.clip_gradients(model, optimizer, max_norm=training_config.optimization.max_norm)
@@ -139,25 +158,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
 
         gradient_step += 1
 
-        # ---- Logging ---- #
-
-        # Maybe log loss
-        if gradient_step % training_config.logging.log_every_n_steps == 0:
-
-            gathered_interval_loss = fabric.all_reduce(interval_loss, reduce_op="mean").item()
-            gathered_interval_inf_or_nan_count = fabric.all_reduce(interval_inf_or_nan_count, reduce_op="mean").item()
-            avg_loss = gathered_interval_loss / ((training_config.logging.log_every_n_steps*training_config.optimization.gradient_accumulation_steps) - gathered_interval_inf_or_nan_count)
-
-            interval_loss = torch.tensor(0.0, device=fabric.device)
-            interval_inf_or_nan_count = torch.tensor(0, device=fabric.device)
-
-            fabric.log("loss", avg_loss, step=gradient_step)
-            fabric.log("inf_or_nan_count", gathered_interval_inf_or_nan_count, step=gradient_step)
-            fabric.log("learning_rate", lr_scheduler.get_last_lr()[0], step=gradient_step)
-            log(f"Step {gradient_step} Loss: {avg_loss}")
-
         # ---- Checkpointing ---- #
-
         # Maybe save checkpoint 
         if gradient_step % training_config.checkpointing.save_every_n_steps == 0:
             log(f"Saving checkpoint at step {gradient_step}")
@@ -170,7 +171,7 @@ def main(model_config_override, training_config_override, evaluation_config_over
         # --- Break Training Condition --- #
         if gradient_step == training_config.training_steps:
             # Save final checkpoint if we didn't save it at already 
-            if gradient_step % training_config.checkpointing.save_every_n_steps != 0:
+            if gradient_step % training_config.chckpointing.save_every_n_steps != 0:
                 log(f"Saving final checkpoint at step {gradient_step}")
                 save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, gradient_step)
             break

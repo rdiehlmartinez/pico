@@ -1,16 +1,15 @@
 from config import PicoConfig
 
-import yaml
 import lightning as L
 import torch
 import os
 import logging
 from datetime import datetime
+import wandb
 from wandb.integration.lightning.fabric import WandbLogger
 
-
 from typing import Optional
-from config import PicoConfig, TrainingConfig, EvaluationConfig
+from config import PicoConfig, TrainingConfig, EvaluationConfig, update_config_from_yaml
 from lightning.fabric.loggers import Logger as FabricLogger
 
 from . import ROOT_DIR, CHECKPOINT_DIR
@@ -21,7 +20,7 @@ from . import ROOT_DIR, CHECKPOINT_DIR
 #
 ########################################################
 
-def initialize_config(config_override, config_type):
+def initialize_config(config_override_path, config_type):
     """
     Setup the config with the given config_override. 
     """
@@ -35,8 +34,8 @@ def initialize_config(config_override, config_type):
     else:
         raise ValueError(f"Invalid config type: {config_type}")
 
-    if config_override != "":
-        config = config_cls(**yaml.load(config_override))
+    if config_override_path != "":
+        config = update_config_from_yaml(config_cls(), config_override_path)
     else:
         config = config_cls()
 
@@ -129,13 +128,24 @@ def initialize_logging(training_config: TrainingConfig):
 
     experiment_tracker = None
     if training_config.logging.experiment_tracker == "wandb":
+
         assert training_config.logging.wandb_project is not None, \
             "Wandb project must be provided if wandb is to be used."
         assert training_config.logging.wandb_entity is not None, \
             "Wandb entity must be provided if wandb is to be used."
+
+        _run_id = None
+        if training_config.checkpointing.load_checkpoint_path:
+            # If we are loading a checkpoint, we can try to find the run id of the previous run
+            previous_runs = wandb.Api().runs(path="pico-lm/pico",filters={"display_name": training_config.run_name})
+            if len(previous_runs) == 1:
+                _run_id = previous_runs[0].id
+
         experiment_tracker = WandbLogger(
             project=training_config.logging.wandb_project,
-            entity=training_config.logging.wandb_entity
+            entity=training_config.logging.wandb_entity,
+            id=_run_id,
+            name=training_config.run_name
         )
     elif training_config.logging.experiment_tracker != "" or training_config.logging.experiment_tracker is not None:
         raise ValueError(f"Invalid experiment tracker: {training_config.logging.experiment_tracker}")
@@ -189,18 +199,11 @@ def initialize_checkpointing(training_config: TrainingConfig):
     # create branch 
     create_branch(repo_id=huggingface_repo_id, branch=training_config.run_name, exist_ok=True)
 
-    repo = Repository(
+    _ = Repository(
         checkpoint_dir,
         clone_from=huggingface_repo_id,
         revision=training_config.run_name,
     )
-
-    try:
-        # the branch name should have been created already by the `create_repo` call
-        repo.git_pull()
-    except OSError:
-        # if the repo is empty, the git_pull will fail
-        pass
 
 
 ########################################################

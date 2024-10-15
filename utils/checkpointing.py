@@ -6,18 +6,19 @@ from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 
 from . import ROOT_DIR, CHECKPOINT_DIR
 
-def load_checkpoint(fabric, training_config, model, optimizer, lr_scheduler):
+def load_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, train_dataloader=None):
     """
     Load a checkpoint from the specified path.
+    Optionally, fast forward the dataloader to the start step.
     """
 
-    assert os.path.exists(training_config.checkpointing.load_path),\
-        f"Checkpoint path {training_config.checkpointing.load_path} does not exist"
+    assert os.path.exists(training_config.checkpointing.load_checkpoint_path),\
+        f"Checkpoint path {training_config.checkpointing.load_checkpoint_path} does not exist"
 
     # load the checkpoint
-    model_state_path = os.path.join(training_config.checkpointing.load_path, "model.pt")
-    optimizer_state_path = os.path.join(training_config.checkpointing.load_path, "optimizer.pt")
-    training_state_path = os.path.join(training_config.checkpointing.load_path, "training.pt")
+    model_state_path = os.path.join(training_config.checkpointing.load_checkpoint_path, "model.pt")
+    optimizer_state_path = os.path.join(training_config.checkpointing.load_checkpoint_path, "optimizer.pt")
+    training_state_path = os.path.join(training_config.checkpointing.load_checkpoint_path, "training.pt")
 
     # load the checkpoint
     model_state = fabric.load(model_state_path)
@@ -27,10 +28,19 @@ def load_checkpoint(fabric, training_config, model, optimizer, lr_scheduler):
     model.load_state_dict(model_state["model"])
     optimizer.load_state_dict(optimizer_state["optimizer"])
     lr_scheduler.load_state_dict(optimizer_state["lr_scheduler"])
-    _set_rng_states(training_state["rng_state"])
-    step = training_state["step"]
 
-    return model, optimizer, lr_scheduler, step
+    step = training_state["step"]
+    if train_dataloader is not None:
+        train_iterator = iter(train_dataloader)
+        for _ in range(step):
+            next(train_iterator)
+
+    _set_rng_states(training_state["rng_state"])
+
+    if train_dataloader is not None:
+        return model, optimizer, lr_scheduler, step, train_iterator
+    else:
+        return model, optimizer, lr_scheduler, step
 
 def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, step):
     """
@@ -101,9 +111,9 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         # uploading logs to HuggingFace Hub
         upload_folder(
             folder_path=os.path.join(run_dir, "logs"),
-            path_in_repo="logs",
+            path_in_repo=f"logs",
             repo_id=training_config.checkpointing.hf_repo_id,
-            commit_message=f"Saving logs",
+            commit_message=f"Uploading Logs -- Step {step}",
             revision=training_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )
