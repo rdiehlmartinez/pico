@@ -1,11 +1,11 @@
-ROOT_DIR = "runs"
+RUNS_DIR = "runs"
 CHECKPOINT_DIR = "checkpoints"
 
 import os
 from config import TrainingConfig
 
 
-def is_logged_into_huggingface(training_config: TrainingConfig) -> bool:
+def has_hf_access(training_config: TrainingConfig) -> bool:
     """Checks if the user is logged into HuggingFace."""
     # check that the user has write access to https://huggingface.co/pico-lm
     from huggingface_hub import HfApi
@@ -44,7 +44,7 @@ def is_logged_into_huggingface(training_config: TrainingConfig) -> bool:
         """
     )
 
-def is_logged_into_wandb(training_config: TrainingConfig) -> bool:
+def has_wandb_access(training_config: TrainingConfig) -> bool:
     """Checks if the user is logged into Weights & Biases."""
     import wandb
 
@@ -63,15 +63,14 @@ def is_logged_into_wandb(training_config: TrainingConfig) -> bool:
     return True
 
 
-def login_checks(training_config: TrainingConfig) -> None:
+def third_party_auth_checks(training_config: TrainingConfig) -> None:
     """
-    Checks that the user is logged into HuggingFace and Weights & Biases and has access to 
-    the specified organization or entity. 
+    Checks that the user has access to HuggingFace and Weights & Biases. 
     """
     # Weights & Biases 
     if training_config.logging.experiment_tracker == "wandb":
-        assert is_logged_into_wandb(training_config), "Please login to Weights & Biases to continue!"
+        assert has_wandb_access(training_config), "Please login to Weights & Biases to continue!"
 
     # HuggingFace 
     if training_config.checkpointing.hf_repo_id is not None:
-        assert is_logged_into_huggingface(training_config), "Please login to HuggingFace to continue!"
+        assert has_hf_access(training_config), "Please login to HuggingFace to continue!"

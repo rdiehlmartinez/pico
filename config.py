@@ -90,8 +90,9 @@ class LoggingConfig:
 class CheckpointConfig:
     save_every_n_steps: int = 20
 
-    # Path to load a checkpoint from
+    # Path to load a checkpoint from or automatically load the latest checkpoint in the run directory
     load_checkpoint_path: Optional[str] = None
+    load_latest_checkpoint: bool = False
 
     # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
     # Should be in the format of <(username or )>/<repo_name>

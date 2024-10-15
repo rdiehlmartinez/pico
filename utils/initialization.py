@@ -12,7 +12,7 @@ from typing import Optional
 from config import PicoConfig, TrainingConfig, EvaluationConfig, update_config_from_yaml
 from lightning.fabric.loggers import Logger as FabricLogger
 
-from . import ROOT_DIR, CHECKPOINT_DIR
+from . import RUNS_DIR, CHECKPOINT_DIR
 
 ########################################################
 #
@@ -51,7 +51,7 @@ def initialize_run_dir(training_config: TrainingConfig):
         run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         training_config.run_name = run_name
 
-    run_dir = os.path.join(ROOT_DIR, run_name)
+    run_dir = os.path.join(RUNS_DIR, run_name)
 
     os.makedirs(run_dir, exist_ok=True)
 
@@ -82,7 +82,7 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
     """
     Create a log file in the run directory.
    """
-    run_dir = os.path.join(ROOT_DIR, training_config.run_name)
+    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
     logs_dir = os.path.join(run_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
     
@@ -175,7 +175,7 @@ def initialize_checkpointing(training_config: TrainingConfig):
     from huggingface_hub.errors import HfHubHTTPError
     from huggingface_hub.repository import Repository
 
-    run_dir = os.path.join(ROOT_DIR, training_config.run_name)
+    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
     checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
 
     _repo_sleep_time = 1

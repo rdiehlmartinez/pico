@@ -25,7 +25,7 @@ from utils.checkpointing import (
     save_config
 )
 
-from utils import login_checks
+from utils import third_party_auth_checks
 
 @click.command()
 @click.option("--model_config_override_path", type=str, default="") #optional 
@@ -47,8 +47,8 @@ def main(model_config_override_path, training_config_override_path, evaluation_c
     training_config = initialize_config(training_config_override_path, "training")
     evaluation_config = initialize_config(evaluation_config_override_path, "evaluation")
 
-    # Check that the user is logged into HuggingFace and Weights & Biases (if specified)
-    login_checks(training_config)
+    # Check that the user has access to third-party services (HuggingFace, Weights & Biases)
+    third_party_auth_checks(training_config)
 
     # ---- Setup Run Directory ---- #
     initialize_run_dir(training_config)
@@ -79,7 +79,8 @@ def main(model_config_override_path, training_config_override_path, evaluation_c
     initialize_checkpointing(training_config)
     L.seed_everything(42)
 
-    if training_config.checkpointing.load_checkpoint_path:
+    should_load_checkpoint = training_config.checkpointing.load_checkpoint_path is not None or training_config.checkpointing.load_latest_checkpoint
+    if should_load_checkpoint:
         model, optimizer, lr_scheduler, train_start_step, train_iterator = load_checkpoint(
             fabric, training_config, model, optimizer, lr_scheduler, train_dataloader
         )
