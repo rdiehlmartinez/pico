@@ -1,15 +1,21 @@
-from config import PicoConfig
-
 import lightning as L
 import torch
 import os
 import logging
+import yaml
+from dataclasses import fields, is_dataclass
 from datetime import datetime
 import wandb
 from wandb.integration.lightning.fabric import WandbLogger
 
 from typing import Optional
-from config import PicoConfig, TrainingConfig, EvaluationConfig, update_config_from_yaml
+from config import (
+    DataConfig,
+    ModelConfig, 
+    TrainingConfig, 
+    EvaluationConfig, 
+)
+
 from lightning.fabric.loggers import Logger as FabricLogger
 
 from . import RUNS_DIR, CHECKPOINT_DIR
@@ -20,26 +26,39 @@ from . import RUNS_DIR, CHECKPOINT_DIR
 #
 ########################################################
 
-def initialize_config(config_override_path, config_type):
+def _apply_config_overrides(config, overrides: dict):
     """
-    Setup the config with the given config_override. 
+    Apply the given config overrides to the config. 
     """
-
-    if config_type == "model":
-        config_cls = PicoConfig
-    elif config_type == "training":
-        config_cls = TrainingConfig
-    elif config_type == "evaluation":
-        config_cls = EvaluationConfig
-    else:
-        raise ValueError(f"Invalid config type: {config_type}")
-
-    if config_override_path != "":
-        config = update_config_from_yaml(config_cls(), config_override_path)
-    else:
-        config = config_cls()
-
+    for field in fields(config):
+        field_value = getattr(config, field.name)
+        if is_dataclass(field_value):
+            _apply_config_overrides(field_value, overrides.get(field.name, {}))
+        else: 
+            if field.name in overrides:
+                setattr(config, field.name, overrides[field.name])
     return config
+
+def initialize_config(config_path: Optional[str] = None):
+    """
+    Setup the config with the given config_overrie. 
+    """
+    data_config = DataConfig()
+    model_config = ModelConfig()
+    training_config = TrainingConfig()
+    evaluation_config = EvaluationConfig()
+
+    if config_path:
+        # NOTE: Config overriding logic - this can be reimplemented by users in any number of 
+        # different ways (e.g., hydra config setup); here I'm trying to setup the simplest possible
+        # config override system that is still flexible and extendable. 
+        overrides = yaml.safe_load(open(config_path, "r"))
+        data_config = _apply_config_overrides(data_config, overrides.get('data', {}))
+        model_config = _apply_config_overrides(model_config, overrides.get('model', {}))
+        training_config = _apply_config_overrides(training_config, overrides.get('training', {}))
+        evaluation_config = _apply_config_overrides(evaluation_config, overrides.get('evaluation', {}))
+
+    return data_config, model_config, training_config, evaluation_config
 
 def initialize_run_dir(training_config: TrainingConfig):
     """
@@ -205,7 +224,6 @@ def initialize_checkpointing(training_config: TrainingConfig):
         revision=training_config.run_name,
     )
 
-
 ########################################################
 #
 # Optimizer and Scheduler
@@ -224,7 +242,6 @@ def initialize_optimizer(model, training_config: TrainingConfig):
 
     return optimizer
  
-
 def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
     """
     Initialize the learning rate scheduler with the given config. 

@@ -28,10 +28,8 @@ from utils.checkpointing import (
 from utils import third_party_auth_checks
 
 @click.command()
-@click.option("--model_config_override_path", type=str, default="") #optional 
-@click.option("--training_config_override_path", type=str, default="") #optional 
-@click.option("--evaluation_config_override_path", type=str, default="") #optional 
-def main(model_config_override_path, training_config_override_path, evaluation_config_override_path):
+@click.option("--config_path", type=str,)
+def main(config_path: str):
     """
     Core Training Loop. 
     """
@@ -43,9 +41,7 @@ def main(model_config_override_path, training_config_override_path, evaluation_c
     ########################################################
 
     # ---- Setup Configs ---- #
-    model_config = initialize_config(model_config_override_path, "model")
-    training_config = initialize_config(training_config_override_path, "training")
-    evaluation_config = initialize_config(evaluation_config_override_path, "evaluation")
+    data_config, model_config, training_config, evaluation_config = initialize_config(config_path)
 
     # Check that the user has access to third-party services (HuggingFace, Weights & Biases)
     third_party_auth_checks(training_config)
@@ -63,8 +59,8 @@ def main(model_config_override_path, training_config_override_path, evaluation_c
 
     # ---- Setup Dataset, Tokenizer, and Dataloader ---- #
     dataset = WikiText2()
-    train_dataloader = DataLoader(dataset, batch_size=32, shuffle=True)
-    model_config.tokenizer.vocab_size = dataset.vocab_size
+    train_dataloader = DataLoader(dataset, batch_size=model_config.batch_size, shuffle=True)
+    model_config.vocab_size = dataset.vocab_size
 
     # ---- Setup Model, Optimizer, and Dataloaders ---- #
     model = Pico(model_config, fabric)
@@ -84,7 +80,6 @@ def main(model_config_override_path, training_config_override_path, evaluation_c
         model, optimizer, lr_scheduler, train_start_step, train_iterator = load_checkpoint(
             fabric, training_config, model, optimizer, lr_scheduler, train_dataloader
         )
-        log(f"Loaded checkpoint from {training_config.checkpointing.load_checkpoint_path}")
     else:
         train_start_step = 0
         train_iterator = iter(train_dataloader)

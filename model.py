@@ -15,7 +15,7 @@ import torch.backends.cuda
 import torch.nn as nn
 import torch.nn.functional as F
 
-from config import PicoConfig
+from config import ModelConfig
 from typing import Tuple, Optional
 
 import lightning as L
@@ -27,10 +27,10 @@ import lightning as L
 ########################################################
 
 class RMSNorm(torch.nn.Module):
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: ModelConfig):
         super().__init__()
         self.eps = config.norm.eps
-        self.weight = nn.Parameter(torch.ones(config.model.d_model))
+        self.weight = nn.Parameter(torch.ones(config.d_model))
 
     def _norm(self, x):
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
@@ -55,7 +55,7 @@ class RoPE(nn.Module):
     _freqs_cis: torch.Tensor = None
 
     # TODO: implement config 
-    def __init__(self, config: PicoConfig, fabric: L.Fabric):
+    def __init__(self, config: ModelConfig, fabric: L.Fabric):
         """
         Rotary positional embeddings (RoPE). 
         """
@@ -64,9 +64,9 @@ class RoPE(nn.Module):
         self.fabric = fabric
 
         self.theta = config.position_emb.theta
-        self.dim = config.model.d_model // config.model.n_heads
+        self.dim = config.d_model // config.attention.n_heads
 
-        max_seq_len = config.model.max_seq_len
+        max_seq_len = config.max_seq_len
 
         # only gets set once, and then reused for all RoPE instances
         if RoPE._freqs_cis is None:
@@ -137,18 +137,18 @@ class RoPE(nn.Module):
 ########################################################
 
 class Attention(nn.Module):
-    def __init__(self, config: PicoConfig, fabric: L.Fabric):
+    def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
 
         self.fabric = fabric
 
-        self.n_heads = config.model.n_heads
-        self.n_kv_heads = config.model.n_kv_heads
+        self.n_heads = config.attention.n_heads
+        self.n_kv_heads = config.attention.n_kv_heads
 
-        self.max_batch_size = config.model.max_batch_size
-        self.max_seq_len = config.model.max_seq_len
+        self.batch_size = config.batch_size
+        self.max_seq_len = config.max_seq_len
 
-        d_model = config.model.d_model
+        d_model = config.d_model
         self.head_dim = d_model // self.n_heads
 
         self.n_rep = self.n_heads // self.n_kv_heads
@@ -206,8 +206,8 @@ class Attention(nn.Module):
 
         if inference_mode and start_pos > 0:
             if self.k_cache is None and self.v_cache is None:
-                self.k_cache = torch.zeros((self.max_batch_size, self.max_seq_len, self.n_kv_heads, self.head_dim))
-                self.v_cache = torch.zeros((self.max_batch_size, self.max_seq_len, self.n_kv_heads, self.head_dim))
+                self.k_cache = torch.zeros((self.batch_size, self.max_seq_len, self.n_kv_heads, self.head_dim))
+                self.v_cache = torch.zeros((self.batch_size, self.max_seq_len, self.n_kv_heads, self.head_dim))
 
             self.cache_k[:bsz, start_pos : start_pos + seq_len] = _keys
             self.cache_v[:bsz, start_pos : start_pos + seq_len] = _values
@@ -241,10 +241,10 @@ class Attention(nn.Module):
 ########################################################
 
 class SwiGLU(nn.Module):
-    def __init__(self, config: PicoConfig):
+    def __init__(self, config: ModelConfig):
         super().__init__()
 
-        model_dim = config.model.d_model
+        model_dim = config.d_model
         act_hidden_dim = config.activation.act_hidden_dim # usually 4 * d_model 
 
         self.w_0 = nn.Linear(model_dim, act_hidden_dim, bias=False)
@@ -261,7 +261,7 @@ class SwiGLU(nn.Module):
 ########################################################
 
 class PicoBlock(nn.Module):
-    def __init__(self, config: PicoConfig, fabric: L.Fabric):
+    def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
 
         self.attention = Attention(config, fabric)
@@ -282,22 +282,22 @@ class PicoBlock(nn.Module):
 
 class Pico(nn.Module):
 
-    def __init__(self, config: PicoConfig, fabric: L.Fabric):
+    def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
         self.config = config
         self.fabric = fabric
 
-        self.vocab_size = config.tokenizer.vocab_size
-        self.n_layers = config.model.n_layers
+        self.vocab_size = config.vocab_size
+        self.n_layers = config.n_layers
 
-        self.embedding_proj = nn.Embedding(self.vocab_size, config.model.d_model)
+        self.embedding_proj = nn.Embedding(self.vocab_size, config.d_model)
         
         self.layers = nn.ModuleList([PicoBlock(config, fabric) for _ in range(self.n_layers)])
 
         self.output_norm = RMSNorm(config)
 
         # NOTE: the de-embedding projection is not tied to the embedding projection
-        self.de_embedding_proj = nn.Linear(config.model.d_model, self.vocab_size, bias=False)
+        self.de_embedding_proj = nn.Linear(config.d_model, self.vocab_size, bias=False)
 
     def forward(
             self, 

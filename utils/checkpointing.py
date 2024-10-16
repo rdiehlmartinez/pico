@@ -91,19 +91,20 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
 
     os.symlink(f"step_{step}", latest_symlink_path, target_is_directory=True)
     
-    if step == 0:
-        # upload the config to the HuggingFace Hub
-        upload_file(
-            path_or_fileobj=os.path.join(run_dir, "config.yaml"),
-            path_in_repo="config.yaml",
-            repo_id=training_config.checkpointing.hf_repo_id,
-            commit_message=f"Saving run config",
-            revision=training_config.run_name,
-            token=os.getenv("HF_TOKEN"),
-        )
-
     # Pushing to HuggingFace Hub
     if training_config.checkpointing.hf_repo_id is not None:
+
+        if step == 0:
+            # upload the config to the HuggingFace Hub
+            upload_file(
+                path_or_fileobj=os.path.join(run_dir, "config.yaml"),
+                path_in_repo="config.yaml",
+                repo_id=training_config.checkpointing.hf_repo_id,
+                commit_message=f"Saving run config",
+                revision=training_config.run_name,
+                token=os.getenv("HF_TOKEN"),
+            )
+
         # uploading models and optimizer to HuggingFace Hub
         upload_folder(
             folder_path=curr_checkpoint_dir,
