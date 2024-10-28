@@ -167,7 +167,7 @@ def main(config_path: str):
         # --- Break Training Condition --- #
         if gradient_step == training_config.training_steps:
             # Save final checkpoint if we didn't save it at already 
-            if gradient_step % training_config.chckpointing.save_every_n_steps != 0:
+            if gradient_step % training_config.checkpointing.save_every_n_steps != 0:
                 log(f"Saving final checkpoint at step {gradient_step}")
                 save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, gradient_step)
             break

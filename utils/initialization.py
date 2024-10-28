@@ -166,7 +166,7 @@ def initialize_logging(training_config: TrainingConfig):
             id=_run_id,
             name=training_config.run_name
         )
-    elif training_config.logging.experiment_tracker != "" or training_config.logging.experiment_tracker is not None:
+    elif training_config.logging.experiment_tracker is not None and training_config.logging.experiment_tracker != "":
         raise ValueError(f"Invalid experiment tracker: {training_config.logging.experiment_tracker}")
 
     return logger, experiment_tracker
