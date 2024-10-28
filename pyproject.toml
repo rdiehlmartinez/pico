@@ -18,6 +18,10 @@ huggingface-hub = {extras = ["cli"], version = "^0.25.1"}
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"
+datasets = "^3.0.1"
+transformers = "^4.45.2"
+jupyter = "^1.1.1"
+pre-commit = "^4.0.1"
 
 [build-system]
 requires = ["poetry-core"]
