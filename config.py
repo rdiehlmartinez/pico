@@ -1,6 +1,6 @@
 """Defines the set of hyperparameters to be specified in the config file."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional
 
 VOCAB_SIZE = 32000
@@ -39,10 +39,10 @@ class ModelConfig:
     batch_size: int = BATCH_SIZE
     max_seq_len: int = MAX_SEQ_LEN
 
-    attention: _AttentionConfig = _AttentionConfig()
-    activation: _ActivationConfig = _ActivationConfig()
-    norm: _RMSNormConfig = _RMSNormConfig()
-    position_emb: _RoPEConfig = _RoPEConfig()
+    attention: _AttentionConfig = field(default_factory=_AttentionConfig)
+    activation: _ActivationConfig = field(default_factory=_ActivationConfig)
+    norm: _RMSNormConfig = field(default_factory=_RMSNormConfig)
+    position_emb: _RoPEConfig = field(default_factory=_RoPEConfig)
 
 ########################################################
 #
@@ -68,9 +68,9 @@ class _TokenizerConfig:
 
 @dataclass
 class DataConfig: 
-    dataset: _DatasetConfig = _DatasetConfig()
-    dataloader: _DataLoaderConfig = _DataLoaderConfig()
-    tokenizer: _TokenizerConfig = _TokenizerConfig()
+    dataset: _DatasetConfig = field(default_factory=_DatasetConfig)
+    dataloader: _DataLoaderConfig = field(default_factory=_DataLoaderConfig)
+    tokenizer: _TokenizerConfig = field(default_factory=_TokenizerConfig)
 
 ########################################################
 #
@@ -101,6 +101,10 @@ class _OptimizationConfig:
     # Gradient Accumulation
     gradient_accumulation_steps: int = 1
 
+    # MAML inner loop
+    num_inner_steps: int = 1
+    inner_lr: float = 1e-3
+
 @dataclass
 class _LoggingConfig:
     experiment_tracker: Optional[str] = "wandb"
@@ -126,11 +130,11 @@ class _CheckpointConfig:
 class TrainingConfig:
     run_name: Optional[str] = None
 
-    fabric: _FabricConfig = _FabricConfig()
-    optimization: _OptimizationConfig = _OptimizationConfig()
+    fabric: _FabricConfig = field(default_factory=_FabricConfig)
+    optimization: _OptimizationConfig = field(default_factory=_OptimizationConfig)
 
-    logging: _LoggingConfig = _LoggingConfig()
-    checkpointing: _CheckpointConfig = _CheckpointConfig()
+    logging: _LoggingConfig = field(default_factory=_LoggingConfig)
+    checkpointing: _CheckpointConfig = field(default_factory=_CheckpointConfig)
 
     strategy: str = "deepspeed"
     training_steps: int = 100
