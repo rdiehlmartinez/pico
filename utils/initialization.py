@@ -84,7 +84,7 @@ def initialize_fabric(training_config: TrainingConfig, experiment_tracker: Optio
         precision=training_config.fabric.precision,
         devices=training_config.fabric.num_devices,
         num_nodes=training_config.fabric.num_nodes,
-        loggers=[experiment_tracker]
+        loggers=[experiment_tracker] if experiment_tracker is not None else None
     )
 
     fabric.launch()
