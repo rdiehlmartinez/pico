@@ -110,7 +110,10 @@ def main(config_path: str):
         train_start_step = 0
         train_iterator = iter(train_dataloader)
         save_config(fabric, training_config, model_config, evaluation_config)
-        save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, 0)
+
+    save_checkpoint(
+        fabric, training_config, model, optimizer, lr_scheduler, train_start_step
+    )
 
     ########################################################
     #
