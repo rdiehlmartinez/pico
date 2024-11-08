@@ -154,7 +154,7 @@ def initialize_logging(training_config: TrainingConfig):
             "Wandb entity must be provided if wandb is to be used."
 
         _run_id = None
-        if training_config.checkpointing.load_checkpoint_path:
+        if training_config.checkpointing.load_checkpoint_path or training_config.checkpointing.load_latest_checkpoint:
             # If we are loading a checkpoint, we can try to find the run id of the previous run
             previous_runs = wandb.Api().runs(path="pico-lm/pico",filters={"display_name": training_config.run_name})
             if len(previous_runs) == 1:
