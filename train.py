@@ -227,6 +227,12 @@ def main(config_path: str):
                 )
             break
 
+    if gradient_step < training_config.training_steps:
+        log(f"Training finished early at step {gradient_step}", level=logging.WARNING)
+        save_checkpoint(
+            fabric, training_config, model, optimizer, lr_scheduler, gradient_step
+        )
+
     # --- Final Evaluation --- #
     log("Starting Final Evaluation!")
 
