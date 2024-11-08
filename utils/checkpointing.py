@@ -1,24 +1,34 @@
-import os 
+import os
 import yaml
 from huggingface_hub import upload_folder, upload_file
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 
 from . import RUNS_DIR, CHECKPOINT_DIR
 
-def load_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, train_dataloader=None):
+
+def load_checkpoint(
+    fabric, training_config, model, optimizer, lr_scheduler, train_dataloader=None
+):
     """
     Load a checkpoint from the specified path.
     Optionally, fast forward the dataloader to the start step.
+
+
+    Returns None if no checkpoint is found. The user should check for this condition and handle it
+    accordingly.
     """
 
     if training_config.checkpointing.load_checkpoint_path:
         checkpoint_path = training_config.checkpointing.load_checkpoint_path
-        assert os.path.exists(checkpoint_path), f"Checkpoint path {checkpoint_path} does not exist"
     elif training_config.checkpointing.load_latest_checkpoint:
-        checkpoint_path = os.path.join(RUNS_DIR, training_config.run_name, CHECKPOINT_DIR, "latest")
-        assert os.path.lexists(checkpoint_path), f"Latest checkpoint at {checkpoint_path} does not exist"
+        checkpoint_path = os.path.join(
+            RUNS_DIR, training_config.run_name, CHECKPOINT_DIR, "latest"
+        )
     else:
         raise ValueError("No checkpoint path specified")
+
+    if not os.path.exists(checkpoint_path):
+        return None
 
     # load the checkpoint
     model_state_path = os.path.join(checkpoint_path, "model.pt")
@@ -47,6 +57,7 @@ def load_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, tra
     else:
         return model, optimizer, lr_scheduler, step
 
+
 def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, step):
     """
     Save a checkpoint to the specified path.
@@ -70,7 +81,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
 
     model_state = {
         "model": model,
-   }
+    }
     optimizer_state = {
         "optimizer": optimizer,
         "lr_scheduler": lr_scheduler,
@@ -90,17 +101,16 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         os.remove(latest_symlink_path)
 
     os.symlink(f"step_{step}", latest_symlink_path, target_is_directory=True)
-    
+
     # Pushing to HuggingFace Hub
     if training_config.checkpointing.hf_repo_id is not None:
-
         if step == 0:
             # upload the config to the HuggingFace Hub
             upload_file(
                 path_or_fileobj=os.path.join(run_dir, "config.yaml"),
                 path_in_repo="config.yaml",
                 repo_id=training_config.checkpointing.hf_repo_id,
-                commit_message=f"Saving run config",
+                commit_message="Saving run config",
                 revision=training_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
@@ -117,7 +127,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         # uploading logs to HuggingFace Hub
         upload_folder(
             folder_path=os.path.join(run_dir, "logs"),
-            path_in_repo=f"logs",
+            path_in_repo="logs",
             repo_id=training_config.checkpointing.hf_repo_id,
             commit_message=f"Saving Logs -- Step {step}",
             revision=training_config.run_name,
@@ -125,6 +135,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         )
 
     fabric.barrier()
+
 
 def save_config(fabric, training_config, model_config, evaluation_config):
     """
