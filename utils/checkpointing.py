@@ -107,13 +107,13 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
 
     # Pushing to HuggingFace Hub
     # NOTE: if the file already exists, HF will not upload it again (by default)
-    if training_config.checkpointing.hf_repo_id is not None:
+    if training_config.checkpointing.save_checkpoint_repo_id is not None:
         if step == 0:
             # upload the config to the HuggingFace Hub
             upload_file(
                 path_or_fileobj=os.path.join(run_dir, "config.yaml"),
                 path_in_repo="config.yaml",
-                repo_id=training_config.checkpointing.hf_repo_id,
+                repo_id=training_config.checkpointing.save_checkpoint_repo_id,
                 commit_message="Saving run config",
                 revision=training_config.run_name,
                 token=os.getenv("HF_TOKEN"),
@@ -122,7 +122,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         # uploading models and optimizer to HuggingFace Hub
         upload_folder(
             folder_path=curr_checkpoint_dir,
-            repo_id=training_config.checkpointing.hf_repo_id,
+            repo_id=training_config.checkpointing.save_checkpoint_repo_id,
             commit_message=f"Saving Model -- Step {step}",
             revision=training_config.run_name,
             token=os.getenv("HF_TOKEN"),
@@ -132,7 +132,7 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         upload_folder(
             folder_path=os.path.join(run_dir, "logs"),
             path_in_repo="logs",
-            repo_id=training_config.checkpointing.hf_repo_id,
+            repo_id=training_config.checkpointing.save_checkpoint_repo_id,
             commit_message=f"Saving Logs -- Step {step}",
             revision=training_config.run_name,
             token=os.getenv("HF_TOKEN"),
