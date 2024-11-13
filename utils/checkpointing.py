@@ -58,7 +58,9 @@ def load_checkpoint(
         return model, optimizer, lr_scheduler, step
 
 
-def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, step):
+def save_checkpoint(
+    fabric, training_config, model, optimizer, lr_scheduler, step, upload_logs=True
+):
     """
     Save a checkpoint to the specified path.
     """
@@ -68,32 +70,35 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         return
 
     run_dir = os.path.join(RUNS_DIR, training_config.run_name)
+
     root_checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
     os.makedirs(root_checkpoint_dir, exist_ok=True)
 
     curr_checkpoint_dir = os.path.join(root_checkpoint_dir, f"step_{step}")
-
     os.makedirs(curr_checkpoint_dir, exist_ok=True)
 
     model_state_path = os.path.join(curr_checkpoint_dir, "model.pt")
+    if not os.path.exists(model_state_path):
+        model_state = {
+            "model": model,
+        }
+        fabric.save(model_state_path, model_state)
+
     optimizer_state_path = os.path.join(curr_checkpoint_dir, "optimizer.pt")
+    if not os.path.exists(optimizer_state_path):
+        optimizer_state = {
+            "optimizer": optimizer,
+            "lr_scheduler": lr_scheduler,
+        }
+        fabric.save(optimizer_state_path, optimizer_state)
+
     training_state_path = os.path.join(curr_checkpoint_dir, "training.pt")
-
-    model_state = {
-        "model": model,
-    }
-    optimizer_state = {
-        "optimizer": optimizer,
-        "lr_scheduler": lr_scheduler,
-    }
-    training_state = {
-        "step": step,
-        "rng_state": _collect_rng_states(),
-    }
-
-    fabric.save(model_state_path, model_state)
-    fabric.save(optimizer_state_path, optimizer_state)
-    fabric.save(training_state_path, training_state)
+    if not os.path.exists(training_state_path):
+        training_state = {
+            "step": step,
+            "rng_state": _collect_rng_states(),
+        }
+        fabric.save(training_state_path, training_state)
 
     # create symlink to latest checkpoint directory
     latest_symlink_path = os.path.join(run_dir, CHECKPOINT_DIR, "latest")
@@ -103,13 +108,14 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
     os.symlink(f"step_{step}", latest_symlink_path, target_is_directory=True)
 
     # Pushing to HuggingFace Hub
-    if training_config.checkpointing.hf_repo_id is not None:
+    # NOTE: if the file already exists, HF will not upload it again (by default)
+    if training_config.checkpointing.save_checkpoint_repo_id is not None:
         if step == 0:
             # upload the config to the HuggingFace Hub
             upload_file(
                 path_or_fileobj=os.path.join(run_dir, "config.yaml"),
                 path_in_repo="config.yaml",
-                repo_id=training_config.checkpointing.hf_repo_id,
+                repo_id=training_config.checkpointing.save_checkpoint_repo_id,
                 commit_message="Saving run config",
                 revision=training_config.run_name,
                 token=os.getenv("HF_TOKEN"),
@@ -118,21 +124,22 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         # uploading models and optimizer to HuggingFace Hub
         upload_folder(
             folder_path=curr_checkpoint_dir,
-            repo_id=training_config.checkpointing.hf_repo_id,
+            repo_id=training_config.checkpointing.save_checkpoint_repo_id,
             commit_message=f"Saving Model -- Step {step}",
             revision=training_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )
 
         # uploading logs to HuggingFace Hub
-        upload_folder(
-            folder_path=os.path.join(run_dir, "logs"),
-            path_in_repo="logs",
-            repo_id=training_config.checkpointing.hf_repo_id,
-            commit_message=f"Saving Logs -- Step {step}",
-            revision=training_config.run_name,
-            token=os.getenv("HF_TOKEN"),
-        )
+        if upload_logs:
+            upload_folder(
+                folder_path=os.path.join(run_dir, "logs"),
+                path_in_repo="logs",
+                repo_id=training_config.checkpointing.save_checkpoint_repo_id,
+                commit_message=f"Saving Logs -- Step {step}",
+                revision=training_config.run_name,
+                token=os.getenv("HF_TOKEN"),
+            )
 
     fabric.barrier()
 
@@ -146,9 +153,10 @@ def save_config(fabric, training_config, model_config, evaluation_config):
         return
 
     config_path = os.path.join(RUNS_DIR, training_config.run_name, "config.yaml")
-    with open(config_path, "w") as f:
-        yaml.dump(training_config, f)
-        yaml.dump(model_config, f)
-        yaml.dump(evaluation_config, f)
+    if not os.path.exists(config_path):
+        with open(config_path, "w") as f:
+            yaml.dump(training_config, f)
+            yaml.dump(model_config, f)
+            yaml.dump(evaluation_config, f)
 
     fabric.barrier()

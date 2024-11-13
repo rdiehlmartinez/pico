@@ -1,8 +1,8 @@
-RUNS_DIR = "runs"
-CHECKPOINT_DIR = "checkpoints"
-
 import os
 from config import TrainingConfig
+
+RUNS_DIR = "runs"
+CHECKPOINT_DIR = "checkpoints"
 
 
 def has_hf_access(training_config: TrainingConfig) -> bool:
@@ -12,26 +12,30 @@ def has_hf_access(training_config: TrainingConfig) -> bool:
 
     # check that env HF_TOKEN is set
     if os.getenv("HF_TOKEN") is None:
-        print("No HuggingFace token found. You might need to run `source setup.sh` or set the HF_TOKEN environment variable.")
+        print(
+            "No HuggingFace token found. You might need to run `source setup.sh` or set the HF_TOKEN environment variable."
+        )
         return False
 
-    target_org = training_config.checkpointing.hf_repo_id.split("/")[0]
-        
+    target_org = training_config.checkpointing.save_checkpoint_repo_id.split("/")[0]
+
     api = HfApi(token=os.getenv("HF_TOKEN"))
     who_ami = api.whoami()
 
     # check if who_ami has access to org pico-lm
-    orgs = who_ami.get('orgs', []) + [who_ami['name']]
+    orgs = who_ami.get("orgs", []) + [who_ami["name"]]
 
     for org in orgs:
-        if org['name'] == target_org:
-            if org['roleInOrg'] not in ['admin', 'write']:
-                raise ValueError(f"You don't have write access to the {target_org} organization on HuggingFace.")
+        if org["name"] == target_org:
+            if org["roleInOrg"] not in ["admin", "write"]:
+                raise ValueError(
+                    f"You don't have write access to the {target_org} organization on HuggingFace."
+                )
             else:
                 return True
-    
+
     # the target_org might be the user's username
-    if who_ami['name'] == target_org:
+    if who_ami["name"] == target_org:
         return True
 
     raise ValueError(
@@ -44,33 +48,41 @@ def has_hf_access(training_config: TrainingConfig) -> bool:
         """
     )
 
+
 def has_wandb_access(training_config: TrainingConfig) -> bool:
     """Checks if the user is logged into Weights & Biases."""
     import wandb
 
-
     # check that env wandb_api_key is set
     if os.getenv("WANDB_API_KEY") is None:
-        print("No Weights & Biases API key found. You might need to run `source setup.sh` or set the WANDB_API_KEY environment variable.")
+        print(
+            "No Weights & Biases API key found. You might need to run `source setup.sh` or set the WANDB_API_KEY environment variable."
+        )
         return False
 
     api = wandb.Api(api_key=os.getenv("WANDB_API_KEY"))
-    avail_entities = api.viewer.teams 
+    avail_entities = api.viewer.teams
 
     if training_config.logging.wandb_entity not in avail_entities:
-        raise ValueError(f"You don't have access to the {training_config.logging.wandb_entity} entity on Weights & Biases.")
+        raise ValueError(
+            f"You don't have access to the {training_config.logging.wandb_entity} entity on Weights & Biases."
+        )
 
     return True
 
 
 def third_party_auth_checks(training_config: TrainingConfig) -> None:
     """
-    Checks that the user has access to HuggingFace and Weights & Biases. 
+    Checks that the user has access to HuggingFace and Weights & Biases.
     """
-    # Weights & Biases 
+    # Weights & Biases
     if training_config.logging.experiment_tracker == "wandb":
-        assert has_wandb_access(training_config), "Please login to Weights & Biases to continue!"
+        assert has_wandb_access(
+            training_config
+        ), "Please login to Weights & Biases to continue!"
 
-    # HuggingFace 
-    if training_config.checkpointing.hf_repo_id is not None:
-        assert has_hf_access(training_config), "Please login to HuggingFace to continue!"
+    # HuggingFace
+    if training_config.checkpointing.save_checkpoint_repo_id is not None:
+        assert has_hf_access(
+            training_config
+        ), "Please login to HuggingFace to continue!"

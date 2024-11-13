@@ -13,22 +13,27 @@ BATCH_SIZE = 1024
 #
 ########################################################
 
+
 @dataclass
 class _RoPEConfig:
     theta: float = 10000.0
+
 
 @dataclass
 class _RMSNormConfig:
     eps: float = 1e-6
 
+
 @dataclass
 class _ActivationConfig:
     act_hidden_dim: int = 3072
 
-@dataclass 
+
+@dataclass
 class _AttentionConfig:
     n_heads: int = 12
     n_kv_heads: Optional[int] = 4
+
 
 @dataclass
 class ModelConfig:
@@ -44,20 +49,24 @@ class ModelConfig:
     norm: _RMSNormConfig = field(default_factory=_RMSNormConfig)
     position_emb: _RoPEConfig = field(default_factory=_RoPEConfig)
 
+
 ########################################################
 #
 # Data Config
 #
 ########################################################
 
+
 @dataclass
 class _DatasetConfig:
     name: str = "wikitext2"
+
 
 @dataclass
 class _DataLoaderConfig:
     batch_size: int = BATCH_SIZE
     max_seq_len: int = MAX_SEQ_LEN
+
 
 @dataclass
 class _TokenizerConfig:
@@ -66,17 +75,20 @@ class _TokenizerConfig:
     bos_token_id: int = 1
     eos_token_id: int = 2
 
+
 @dataclass
-class DataConfig: 
+class DataConfig:
     dataset: _DatasetConfig = field(default_factory=_DatasetConfig)
     dataloader: _DataLoaderConfig = field(default_factory=_DataLoaderConfig)
     tokenizer: _TokenizerConfig = field(default_factory=_TokenizerConfig)
+
 
 ########################################################
 #
 # Training Configs
 #
 ########################################################
+
 
 @dataclass
 class _FabricConfig:
@@ -85,6 +97,7 @@ class _FabricConfig:
     precision: str = "16-mixed"
     accelerator: str = "cuda"
 
+
 @dataclass
 class _OptimizationConfig:
     # Optimizer
@@ -92,7 +105,7 @@ class _OptimizationConfig:
     lr: float = 1e-5
 
     # Learning Rate Scheduler
-    lr_scheduler: str = "linear_with_warmup" 
+    lr_scheduler: str = "linear_with_warmup"
     lr_warmup_steps: int = 20
 
     # Gradient Clipping
@@ -100,6 +113,7 @@ class _OptimizationConfig:
 
     # Gradient Accumulation
     gradient_accumulation_steps: int = 1
+
 
 @dataclass
 class _LoggingConfig:
@@ -109,18 +123,21 @@ class _LoggingConfig:
 
     log_every_n_steps: int = 10
 
+
 @dataclass
 class _CheckpointConfig:
     save_every_n_steps: int = 20
 
-    # Path to load a checkpoint from local path or automatically load the latest locally-saved checkpoint
-    # NOTE: if both are provided, local_checkpoint_path takes priority.
+    # Path to load a checkpoint from a local path
     load_checkpoint_path: Optional[str] = None
+
+    # Whether to load the latest checkpoint (Takes priority over load_checkpoint_path)
     load_latest_checkpoint: bool = False
 
     # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
     # Should be in the format of <(username or )>/<repo_name>, e.g. pico-lm/pico-7b
-    hf_repo_id: Optional[str] = "pico-lm/demo"
+    save_checkpoint_repo_id: Optional[str] = "pico-lm/demo"
+
 
 @dataclass
 class TrainingConfig:
@@ -135,11 +152,13 @@ class TrainingConfig:
     strategy: str = "deepspeed"
     training_steps: int = 100
 
+
 ########################################################
 #
 # Evaluation Configs
 #
 ########################################################
+
 
 @dataclass
 class EvaluationConfig:
