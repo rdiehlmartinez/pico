@@ -58,7 +58,9 @@ def load_checkpoint(
         return model, optimizer, lr_scheduler, step
 
 
-def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, step):
+def save_checkpoint(
+    fabric, training_config, model, optimizer, lr_scheduler, step, upload_logs=True
+):
     """
     Save a checkpoint to the specified path.
     """
@@ -129,14 +131,15 @@ def save_checkpoint(fabric, training_config, model, optimizer, lr_scheduler, ste
         )
 
         # uploading logs to HuggingFace Hub
-        upload_folder(
-            folder_path=os.path.join(run_dir, "logs"),
-            path_in_repo="logs",
-            repo_id=training_config.checkpointing.save_checkpoint_repo_id,
-            commit_message=f"Saving Logs -- Step {step}",
-            revision=training_config.run_name,
-            token=os.getenv("HF_TOKEN"),
-        )
+        if upload_logs:
+            upload_folder(
+                folder_path=os.path.join(run_dir, "logs"),
+                path_in_repo="logs",
+                repo_id=training_config.checkpointing.save_checkpoint_repo_id,
+                commit_message=f"Saving Logs -- Step {step}",
+                revision=training_config.run_name,
+                token=os.getenv("HF_TOKEN"),
+            )
 
     fabric.barrier()
 

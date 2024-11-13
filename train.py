@@ -112,7 +112,13 @@ def main(config_path: str):
         save_config(fabric, training_config, model_config, evaluation_config)
 
     save_checkpoint(
-        fabric, training_config, model, optimizer, lr_scheduler, train_start_step
+        fabric,
+        training_config,
+        model,
+        optimizer,
+        lr_scheduler,
+        train_start_step,
+        upload_logs=False,
     )
 
     ########################################################
