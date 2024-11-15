@@ -1,11 +1,30 @@
-"""Defines the set of hyperparameters to be specified in the config file."""
+"""
+Welcome to the Pico Config File!
+
+This is where you can specify the hyperparameters for the Pico model, the dataset, the training
+process, evaluation yada yada.
+
+As with anything else in Pico, this file is designed to be as flexible as possible. If you find
+yourself wanting to add a new hyperparameter, go for it! If you want to use hydra for hierarchical
+configs, no problem -- this is very easy to do given that the default configs are all dataclasses.
+
+Some things to NOTE:
+- All hyperparameters are initialized with default values, which can be overridden by the
+  config file.
+- The default vocab size is set to the size of the OLMo tokenizer.
+"""
 
 from dataclasses import dataclass, field
 from typing import Optional
 
-VOCAB_SIZE = 32000
+VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 2048
 BATCH_SIZE = 1024
+GRADIENT_ACCUMULATION_STEPS = (
+    128  # NOTE: Play with this to make the batch size fit in memory.
+)
+
+# N.B. The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
 
 ########################################################
 #
@@ -26,7 +45,7 @@ class _RMSNormConfig:
 
 @dataclass
 class _ActivationConfig:
-    act_hidden_dim: int = 3072
+    act_hidden_dim: int = 768
 
 
 @dataclass
@@ -37,7 +56,7 @@ class _AttentionConfig:
 
 @dataclass
 class ModelConfig:
-    d_model: int = 768
+    d_model: int = 192
     n_layers: int = 12
 
     vocab_size: int = VOCAB_SIZE
@@ -59,21 +78,18 @@ class ModelConfig:
 
 @dataclass
 class _DatasetConfig:
-    name: str = "wikitext2"
+    name: str = "pico-lm/pretokenized-dolma"
 
 
 @dataclass
 class _DataLoaderConfig:
-    batch_size: int = BATCH_SIZE
+    batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
     max_seq_len: int = MAX_SEQ_LEN
 
 
-@dataclass
 class _TokenizerConfig:
+    name: str = "allenai/OLMo-7B-0724-hf"
     vocab_size: int = VOCAB_SIZE
-    pad_token_id: int = 0
-    bos_token_id: int = 1
-    eos_token_id: int = 2
 
 
 @dataclass
@@ -112,7 +128,7 @@ class _OptimizationConfig:
     max_norm: float = 1.0
 
     # Gradient Accumulation
-    gradient_accumulation_steps: int = 1
+    gradient_accumulation_steps: int = 32
 
 
 @dataclass

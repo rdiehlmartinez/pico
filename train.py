@@ -1,3 +1,23 @@
+"""
+You're looking at the core training loop, the glue that holds everything together.
+
+Here we use our initialization utils to setup all the components of the training loop (the model,
+the optimizer, the dataloader, etc.) and then we enter the training loop.
+
+The training loop itself is meant to be simple - it's the daily-driver of training loops.
+
+Here's what we do in the training loop:
+
+1. Compute the model's output
+2. Compute the loss
+3. Do backprop
+4. Update the model's weights
+5. Log the loss (and maybe evaluate the model)
+
+There's also gradient accumulation, gradient clipping, learning rate scheduling, checkpointing,
+and a few other things, but these are made to be as simple as possible.
+"""
+
 import click
 import logging
 import lightning as L
@@ -7,17 +27,16 @@ from lightning.fabric.utilities.rank_zero import rank_zero_only
 
 from model import Pico
 
-from lightning.pytorch.demos import WikiText2
-from torch.utils.data import DataLoader
-
 from utils.initialization import (
     initialize_run_dir,
     initialize_fabric,
     initialize_config,
-    initialize_logging,
-    initialize_optimizer,
+    initialize_dataset,
+    initialize_dataloader,
     initialize_lr_scheduler,
     initialize_checkpointing,
+    initialize_logging,
+    initialize_optimizer,
 )
 from utils.checkpointing import load_checkpoint, save_checkpoint, save_config
 
@@ -62,11 +81,9 @@ def main(config_path: str):
     fabric = initialize_fabric(training_config, experiment_tracker)
 
     # ---- Setup Dataset, Tokenizer, and Dataloader ---- #
-    dataset = WikiText2()
-    train_dataloader = DataLoader(
-        dataset, batch_size=model_config.batch_size, shuffle=True
-    )
-    model_config.vocab_size = dataset.vocab_size
+
+    train_dataset = initialize_dataset(data_config)
+    train_dataloader = initialize_dataloader(data_config, train_dataset)
 
     # ---- Setup Model, Optimizer, and Dataloaders ---- #
     model = Pico(model_config, fabric)
@@ -123,7 +140,7 @@ def main(config_path: str):
 
     ########################################################
     #
-    # Training Configs
+    # Training Commences!
     #
     ########################################################
 
@@ -137,7 +154,15 @@ def main(config_path: str):
     interval_inf_or_nan_count = torch.tensor(0, device=fabric.device)
 
     for batch_idx, batch in enumerate(train_iterator, start=train_start_step):
-        input_ids, labels = batch
+        _input_ids = batch["input_ids"]
+        _input_ids = torch.tensor(_input_ids, device=fabric.device)
+
+        # NOTE: The model is autoregressive, so the labels are just the next token in the sequence.
+        # Thus the sequence length we use in the model is 1 token less than the length of the
+        # sequence stored in the dataset (i.e. 2049 tokens -> 2048 tokens).
+        input_ids = _input_ids[:, :-1]
+        labels = _input_ids[:, 1:]
+
         model_output = model(input_ids).transpose(1, 2)
 
         # ---- Gradient Accumulation (if enabled) ---- #
@@ -161,11 +186,17 @@ def main(config_path: str):
         if should_accumulate_gradients:
             continue
 
-        # NOTE: Code after this point only runs after gradient_accumulation_steps
+        """
+        NOTE: This is important!Ccode after this point only runs after gradient_accumulation_steps.
+        If you've set gradient_accumulation_steps to 1, then this code will run every step. 
+        """
 
         # ---- Logging ---- #
 
         if gradient_step % training_config.logging.log_every_n_steps == 0:
+            # NOTE: This is annoying, I'm sorry I know, but we need the all_reduce to get the
+            #       average loss across all the devices (if you're using multiple GPUs).
+
             gathered_interval_loss = fabric.all_reduce(
                 interval_loss, reduce_op="sum"
             ).item()

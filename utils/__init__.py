@@ -1,3 +1,8 @@
+"""
+Basic constants used by utilites functions in this directory. Probably no need to edit, but do
+what you want.
+"""
+
 import os
 from config import TrainingConfig
 
