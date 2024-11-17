@@ -40,8 +40,6 @@ from utils.initialization import (
 )
 from utils.checkpointing import load_checkpoint, save_checkpoint, save_config
 
-from utils import third_party_auth_checks
-
 
 @click.command()
 @click.option(
@@ -63,9 +61,6 @@ def main(config_path: str):
     data_config, model_config, training_config, evaluation_config = initialize_config(
         config_path
     )
-
-    # Check that the user has access to third-party services (HuggingFace, Weights & Biases)
-    third_party_auth_checks(training_config)
 
     # ---- Setup Run Directory ---- #
     initialize_run_dir(training_config)
