@@ -1,3 +1,14 @@
+"""
+You've arrived at the initialization file.
+
+Here, we initialize all of the components that are part of the learning process. From logging,
+and checkpointing to the optimizer to the dataset and the dataloader, this file contains the
+logic for initializing all of these components.
+
+As always, this code is meant to be basic. We hard-code the obvious defaults, and leave the
+more exotic and experimental components for the user to implement.
+"""
+
 import lightning as L
 import torch
 import os
@@ -7,6 +18,9 @@ from dataclasses import fields, is_dataclass
 from datetime import datetime
 import wandb
 from wandb.integration.lightning.fabric import WandbLogger
+from datasets import load_dataset, Dataset
+from torch.utils.data import DataLoader
+from transformers import AutoTokenizer
 
 from typing import Optional
 from config import (
@@ -104,6 +118,117 @@ def initialize_fabric(
 
 ########################################################
 #
+# Dataset and Tokenization Initialization
+#
+########################################################
+
+
+def initialize_dataset(data_config: DataConfig):
+    """
+    Initialize the dataset with the given config.
+
+    Hey why is this function a single function? Because I want to let you implement any more
+    complicated dataset logic here. For example, you might want to do some sort of special
+    preprocessing on your own dataset (you don't have to for the default dataset, but you
+    might for your own dataset).
+    """
+
+    return load_dataset(data_config.dataset.name, split="train", streaming=True)
+
+
+def initialize_tokenizer(data_config: DataConfig):
+    """
+    Initialize the tokenizer with the given config.
+
+    Feel free to add any more complicated tokenization logic here as well.
+    """
+    return AutoTokenizer.from_pretrained(data_config.tokenizer.name)
+
+
+def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
+    """
+    Initialize the dataloader with the given config.
+
+    You might also want to extend this function to add a sampler, or some sort of custom
+    collate function. For the default dataset, we don't need any of this, because the data are
+    pre-shuffled, and pre-tokenized just for you.
+    """
+
+    def _collate_fn(batch):
+        collated_batch = {"input_ids": [entry["input_ids"] for entry in batch]}
+        return collated_batch
+
+    # NOTE: We divide the batch size by the gradient accumulation steps to ensure that the
+    # effective batch size is correct.
+
+    return DataLoader(
+        dataset,
+        batch_size=data_config.dataloader.batch_size,
+        shuffle=False,  # Keep sequential for streaming datasets
+        pin_memory=True,  # Speeds up transfer to GPU
+        collate_fn=_collate_fn,
+    )
+
+
+########################################################
+#
+# Optimizer and Scheduler
+#
+########################################################
+
+
+def initialize_optimizer(model, training_config: TrainingConfig):
+    """
+    Initialize the optimizer with the given config.
+    """
+
+    if training_config.optimization.optimizer == "adamw":
+        optimizer = torch.optim.AdamW(
+            model.parameters(), lr=training_config.optimization.lr
+        )
+    else:
+        raise ValueError(f"Invalid optimizer: {training_config.optimization.optimizer}")
+
+    return optimizer
+
+
+def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
+    """
+    Initialize the learning rate scheduler with the given config.
+    """
+
+    if training_config.optimization.lr_scheduler == "linear_with_warmup":
+        # Credit where credit is due:
+        # https://github.com/huggingface/transformers/blob/e71a01a104dd663c730e494eb0b6467bb51df357/src/transformers/optimization.py#L102
+        def _lr_lambda(curr_step, num_warmup_steps, num_training_steps):
+            if curr_step < num_warmup_steps:
+                return float(curr_step) / float(max(1, num_warmup_steps))
+            else:
+                return max(
+                    0.0,
+                    float(num_training_steps - curr_step)
+                    / float(max(1, num_training_steps - num_warmup_steps)),
+                )
+
+        lr_lambda = lambda step: _lr_lambda(  # noqa: E731
+            step,
+            training_config.optimization.lr_warmup_steps,
+            training_config.training_steps,
+        )
+        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
+            optimizer,
+            lr_lambda,
+        )
+    else:
+        raise ValueError(
+            f"Invalid learning rate scheduler: {training_config.optimization.lr_scheduler}"
+        )
+
+    return lr_scheduler
+
+
+########################################################
+#
 # Logging
 #
 ########################################################
@@ -133,7 +258,9 @@ def initialize_logging(training_config: TrainingConfig):
 
     If experiment trackers (wandb, etc.) are specified in the config, those loggers are initialized.
     """
-    # Create a logger
+
+    # ---- Standard Local Logger ---- #
+
     logger = logging.getLogger(__name__)
     logger.setLevel(logging.INFO)
 
@@ -155,8 +282,10 @@ def initialize_logging(training_config: TrainingConfig):
     stream_handler.setFormatter(formatter)
     logger.addHandler(stream_handler)
 
-    # ---- Third Party Loggers ----
-    # NOTE: add other experiment trackers here that you want to use
+    # ---- Third Party Loggers aka. Experiment Trackers ----
+
+    # NOTE: Out-of-the-box, Pico supports Weights and Biases.
+    # Add whatever other experiment trackers here that you want to use here.
 
     experiment_tracker = None
     if training_config.logging.experiment_tracker == "wandb":
@@ -250,60 +379,3 @@ def initialize_checkpointing(training_config: TrainingConfig):
         clone_from=huggingface_repo_id,
         revision=training_config.run_name,
     )
-
-
-########################################################
-#
-# Optimizer and Scheduler
-#
-########################################################
-
-
-def initialize_optimizer(model, training_config: TrainingConfig):
-    """
-    Initialize the optimizer with the given config.
-    """
-
-    if training_config.optimization.optimizer == "adamw":
-        optimizer = torch.optim.AdamW(
-            model.parameters(), lr=training_config.optimization.lr
-        )
-    else:
-        raise ValueError(f"Invalid optimizer: {training_config.optimization.optimizer}")
-
-    return optimizer
-
-
-def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
-    """
-    Initialize the learning rate scheduler with the given config.
-    """
-
-    if training_config.optimization.lr_scheduler == "linear_with_warmup":
-        # Credit where credit is due:
-        # https://github.com/huggingface/transformers/blob/e71a01a104dd663c730e494eb0b6467bb51df357/src/transformers/optimization.py#L102
-        def _lr_lambda(curr_step, num_warmup_steps, num_training_steps):
-            if curr_step < num_warmup_steps:
-                return float(curr_step) / float(max(1, num_warmup_steps))
-            else:
-                return max(
-                    0.0,
-                    float(num_training_steps - curr_step)
-                    / float(max(1, num_training_steps - num_warmup_steps)),
-                )
-
-        lr_lambda = lambda step: _lr_lambda(  # noqa: E731
-            step,
-            training_config.optimization.lr_warmup_steps,
-            training_config.training_steps,
-        )
-        lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
-            optimizer,
-            lr_lambda,
-        )
-    else:
-        raise ValueError(
-            f"Invalid learning rate scheduler: {training_config.optimization.lr_scheduler}"
-        )
-
-    return lr_scheduler

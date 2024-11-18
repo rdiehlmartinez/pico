@@ -1,3 +1,8 @@
+"""
+Some utilities for checkpointing. Good, clean checkpointing is probably one of the most important
+parts of training pipeline, especially for researching learning dynamics.
+"""
+
 import os
 import yaml
 from huggingface_hub import upload_folder, upload_file
