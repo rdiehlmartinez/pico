@@ -1,6 +1,8 @@
 """
-Some utilities for checkpointing. Good, clean checkpointing is probably one of the most important
-parts of training pipeline, especially for researching learning dynamics.
+Utilities for checkpointing.
+
+Good, clean checkpointing is probably one of the most important parts of training pipeline,
+especially for researching learning dynamics
 """
 
 import os
@@ -15,12 +17,27 @@ def load_checkpoint(
     fabric, training_config, model, optimizer, lr_scheduler, train_dataloader=None
 ):
     """
-    Load a checkpoint from the specified path.
-    Optionally, fast forward the dataloader to the start step.
+    Load model checkpoint and associated states from disk or latest checkpoint.
 
+    Args:
+        fabric: Lightning Fabric instance for distributed training support
+        training_config: Configuration object containing checkpoint settings
+            - load_checkpoint_path: Optional specific checkpoint path
+            - load_latest_checkpoint: Boolean to load most recent checkpoint
+        model: The model instance to load weights into
+        optimizer: The optimizer instance to load states into
+        lr_scheduler: The learning rate scheduler to load states into
+        train_dataloader: Optional dataloader to fast-forward to the saved step
 
-    Returns None if no checkpoint is found. The user should check for this condition and handle it
-    accordingly.
+    Returns:
+        If train_dataloader is provided:
+            (model, optimizer, lr_scheduler, step, train_iterator)
+        Otherwise:
+            (model, optimizer, lr_scheduler, step)
+        Returns None if no checkpoint is found.
+
+    Raises:
+        ValueError: If no checkpoint path is specified in config
     """
 
     if training_config.checkpointing.load_checkpoint_path:
@@ -67,7 +84,31 @@ def save_checkpoint(
     fabric, training_config, model, optimizer, lr_scheduler, step, upload_logs=True
 ):
     """
-    Save a checkpoint to the specified path.
+    Save model checkpoint and associated states to disk and optionally to HuggingFace Hub.
+
+    Creates a versioned checkpoint directory containing:
+    - model.pt: Model weights and states
+    - optimizer.pt: Optimizer and LR scheduler states
+    - training.pt: Training progress and RNG states
+
+    Also maintains a 'latest' symlink to the most recent checkpoint.
+
+    Args:
+        fabric: Lightning Fabric instance for distributed training support
+        training_config: Configuration object containing:
+            - run_name: Name of the training run
+            - save_checkpoint_repo_id: Optional HuggingFace Hub repo ID
+        model: The model instance to save
+        optimizer: The optimizer instance to save
+        lr_scheduler: The learning rate scheduler to save
+        step: Current training step
+        upload_logs: Whether to upload training logs to HF Hub (default: True)
+
+    Notes:
+        - Only rank 0 process saves checkpoints in distributed training
+        - Checkpoints are saved under: {RUNS_DIR}/{run_name}/checkpoints/step_{step}
+        - Existing checkpoints are not overwritten
+        - HuggingFace Hub uploads are incremental (only new files are uploaded)
     """
 
     if fabric.global_rank != 0:
@@ -151,7 +192,23 @@ def save_checkpoint(
 
 def save_config(fabric, training_config, model_config, evaluation_config):
     """
-    Save the config to a file.
+    Save configuration objects to a YAML file.
+
+    Combines multiple configuration objects into a single YAML file for:
+    - Training parameters
+    - Model architecture
+    - Evaluation settings
+
+    Args:
+        fabric: Lightning Fabric instance for distributed training support
+        training_config: Training configuration object
+        model_config: Model architecture configuration object
+        evaluation_config: Evaluation settings configuration object
+
+    Notes:
+        - Only rank 0 process saves config in distributed training
+        - Config is saved to: {RUNS_DIR}/{training_config.run_name}/config.yaml
+        - Existing config files are not overwritten
     """
     if fabric.global_rank != 0:
         fabric.barrier()

@@ -1,10 +1,10 @@
 """
-You're looking at the core training loop, the glue that holds everything together.
+This is the core training loop: the glue that holds everything together.
 
 Here we use our initialization utils to setup all the components of the training loop (the model,
 the optimizer, the dataloader, etc.) and then we enter the training loop.
 
-The training loop itself is meant to be simple - it's the daily-driver of training loops.
+The training loop itself is meant to be simple and easy to understand.
 
 Here's what we do in the training loop:
 
@@ -48,7 +48,34 @@ from utils.checkpointing import load_checkpoint, save_checkpoint, save_config
 )
 def main(config_path: str):
     """
-    Core Training Loop.
+    Execute the core training loop for the Pico language model.
+
+    This function orchestrates the entire training process through the following stages:
+    1. Initialization
+        - Configuration loading and validation
+        - Model, optimizer, and dataset setup
+        - Logging and experiment tracking setup
+        - Checkpoint management
+
+    2. Training Loop
+        - Forward pass and loss computation
+        - Gradient accumulation and optimization
+        - Learning rate scheduling
+        - Progress logging and metrics tracking
+        - Periodic model checkpointing
+        - Regular model evaluation
+
+    3. Finalization
+        - Final model checkpoint
+        - Final evaluation
+        - Cleanup and logging completion
+
+    Args:
+        config_path (str): Path to the YAML configuration file containing any overrides.
+
+
+    Example:
+        $ python train.py --config_path configs/training_config.yaml
     """
 
     ########################################################
@@ -182,7 +209,7 @@ def main(config_path: str):
             continue
 
         """
-        NOTE: This is important!Ccode after this point only runs after gradient_accumulation_steps.
+        NOTE: This is important! Code after this point only runs after gradient_accumulation_steps.
         If you've set gradient_accumulation_steps to 1, then this code will run every step. 
         """
 
