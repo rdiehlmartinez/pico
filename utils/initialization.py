@@ -1,12 +1,12 @@
 """
-You've arrived at the initialization file.
+Utilities for initializing components of the training process.
 
 Here, we initialize all of the components that are part of the learning process. From logging,
 and checkpointing to the optimizer to the dataset and the dataloader, this file contains the
-logic for initializing all of these components.
+logic for setting up the classes and functions that are used in the training loop.
 
 As always, this code is meant to be basic. We hard-code the obvious defaults, and leave the
-more exotic and experimental components for the user to implement.
+more experimental stuff to you.
 """
 
 import lightning as L
@@ -43,7 +43,14 @@ from . import RUNS_DIR, CHECKPOINT_DIR
 
 def _apply_config_overrides(config, overrides: dict):
     """
-    Apply the given config overrides to the config.
+    Recursively apply configuration overrides to a dataclass config object.
+
+    Args:
+        config: Base configuration object (must be a dataclass)
+        overrides: Dictionary of override values matching config structure
+
+    Returns:
+        Modified config object with overrides to the config.
     """
     for field in fields(config):
         field_value = getattr(config, field.name)
@@ -56,8 +63,21 @@ def _apply_config_overrides(config, overrides: dict):
 
 
 def initialize_config(config_path: Optional[str] = None):
-    """
-    Setup the config with the given config_overrie.
+    """Initialize configuration objects with optional overrides from a YAML file.
+
+    Initializes the default config data classes, and then applies any overrides specified in
+    the given config path.
+
+    Args:
+        config_path: Optional path to a YAML file containing configuration overrides.
+            The YAML structure should match the config class structure.
+
+    Returns:
+        tuple: (DataConfig, ModelConfig, TrainingConfig, EvaluationConfig) containing
+            the initialized configuration objects.
+
+    Example:
+        >>> data_config, model_config, training_config, eval_config = initialize_config("config.yaml")
     """
     data_config = DataConfig()
     model_config = ModelConfig()
@@ -82,10 +102,18 @@ def initialize_config(config_path: Optional[str] = None):
 
 
 def initialize_run_dir(training_config: TrainingConfig):
-    """
-    Initialize the run directory with the given config.
-    """
+    """Initialize a directory for the current training run.
 
+    Creates a unique directory for storing training artifacts (checkpoints, logs, etc.).
+    If no run name is specified in the config, generates a timestamp-based name.
+
+    Args:
+        training_config: Configuration object containing run settings.
+            Must have a 'run_name' attribute that can be None.
+
+    Returns:
+        None
+    """
     run_name = training_config.run_name
     if run_name is None:
         run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
@@ -99,8 +127,22 @@ def initialize_run_dir(training_config: TrainingConfig):
 def initialize_fabric(
     training_config: TrainingConfig, experiment_tracker: Optional[FabricLogger] = None
 ):
-    """
-    Setup the lightning fabric with the given config.
+    """Initialize Lightning Fabric for distributed training.
+
+    Sets up a Lightning Fabric instance with the specified configuration for
+    handling distributed training, mixed precision, and logging.
+
+    Args:
+        training_config: Configuration object containing fabric settings
+            (accelerator, precision, devices, etc.).
+        experiment_tracker: Optional logger instance for experiment tracking
+            (e.g., WandB logger).
+
+    Returns:
+        L.Fabric: Initialized Lightning Fabric instance.
+
+    Example:
+        >>> fabric = initialize_fabric(training_config, wandb_logger)
     """
 
     fabric = L.Fabric(
@@ -124,34 +166,54 @@ def initialize_fabric(
 
 
 def initialize_dataset(data_config: DataConfig):
-    """
-    Initialize the dataset with the given config.
+    """Initialize dataset based on the given config.
 
-    Hey why is this function a single function? Because I want to let you implement any more
-    complicated dataset logic here. For example, you might want to do some sort of special
-    preprocessing on your own dataset (you don't have to for the default dataset, but you
-    might for your own dataset).
+    Feel free to add any more complicated dataset logic here as well.
+
+    Args:
+        data_config: Configuration object containing dataset settings.
+
+    Returns:
+        Dataset: Initialized dataset object.
     """
 
     return load_dataset(data_config.dataset.name, split="train", streaming=True)
 
 
 def initialize_tokenizer(data_config: DataConfig):
-    """
-    Initialize the tokenizer with the given config.
+    """Initialize the tokenizer for text processing.
 
-    Feel free to add any more complicated tokenization logic here as well.
+    This function can be extended to include custom tokenization logic.
+
+    Args:
+        data_config: Configuration object containing tokenizer settings.
+            Must have a tokenizer.name attribute specifying the HuggingFace tokenizer ID.
+
+    Returns:
+        AutoTokenizer: A HuggingFace tokenizer instance.
     """
+
     return AutoTokenizer.from_pretrained(data_config.tokenizer.name)
 
 
 def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
-    """
-    Initialize the dataloader with the given config.
+    """Initialize the DataLoader for efficient batch processing.
+
+    Creates a PyTorch DataLoader that handles batching and data loading for training.
+    Configured specifically for streaming tokenized text datasets.
 
     You might also want to extend this function to add a sampler, or some sort of custom
     collate function. For the default dataset, we don't need any of this, because the data are
     pre-shuffled, and pre-tokenized just for you.
+
+    Args:
+        data_config: Configuration object containing dataloader settings.
+            Must have a dataloader.batch_size attribute.
+        dataset: A HuggingFace Dataset object containing tokenized text data.
+            Expected to have 'input_ids' field in its items.
+
+    Returns:
+        DataLoader: PyTorch DataLoader instance configured for the dataset.
     """
 
     def _collate_fn(batch):
@@ -178,8 +240,22 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
 
 
 def initialize_optimizer(model, training_config: TrainingConfig):
-    """
-    Initialize the optimizer with the given config.
+    """Initialize the optimizer for model training.
+
+    Creates an optimizer instance based on the configuration settings.
+
+    Add whatever other optimizers you want here.
+
+    Args:
+        model: PyTorch model whose parameters will be optimized.
+        training_config: Configuration object containing optimizer settings.
+            Must have:
+            - optimization.optimizer (str): Name of the optimizer ("adamw")
+            - optimization.lr (float): Learning rate for the optimizer
+
+    Returns:
+        torch.optim.Optimizer: Configured optimizer instance.
+
     """
 
     if training_config.optimization.optimizer == "adamw":
@@ -193,8 +269,24 @@ def initialize_optimizer(model, training_config: TrainingConfig):
 
 
 def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
-    """
-    Initialize the learning rate scheduler with the given config.
+    """Initialize a learning rate scheduler with warmup and decay.
+
+    The default is a learning rate scheduler that implements a linear warmup followed by
+    linear decay. The learning rate increases linearly from 0 to the initial lr
+    during warmup, then decreases linearly to 0 during the remaining steps.
+
+    Implement other types of learning rate schedulers here as well.
+
+    Args:
+        optimizer: PyTorch optimizer whose learning rate will be scheduled.
+        training_config: Configuration object containing scheduler settings.
+            Must have:
+            - optimization.lr_scheduler (str): Scheduler type ("linear_with_warmup")
+            - optimization.lr_warmup_steps (int): Number of warmup steps
+            - training_steps (int): Total number of training steps
+
+    Returns:
+        torch.optim.lr_scheduler.LambdaLR: Learning rate scheduler instance.
     """
 
     if training_config.optimization.lr_scheduler == "linear_with_warmup":
@@ -235,9 +327,26 @@ def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
 
 
 def _initialize_log_file(training_config: TrainingConfig) -> str:
+    """Create and initialize a timestamped log file in the run's log directory.
+
+    Sets up a log file with a unique timestamp in the run's logging directory.
+    Creates the necessary directory structure if it doesn't exist.
+
+    Directory Structure:
+        RUNS_DIR/
+        └── {run_name}/
+            └── logs/
+                └── log_YYYYMMDD_HHMMSS.txt
+
+    Args:
+        training_config: Configuration object containing run settings.
+            Must have run_name attribute for directory structure.
+
+    Returns:
+        str: Absolute path to the created log file.
+
     """
-    Create a log file in the run directory.
-    """
+
     run_dir = os.path.join(RUNS_DIR, training_config.run_name)
     logs_dir = os.path.join(run_dir, "logs")
     os.makedirs(logs_dir, exist_ok=True)
@@ -253,10 +362,25 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
 
 
 def initialize_logging(training_config: TrainingConfig):
-    """
-    Initialize the logging functionality. A standard file and congole logger is initialized by default.
+    """Initialize logging system with file, console, and optional experiment tracking.
 
-    If experiment trackers (wandb, etc.) are specified in the config, those loggers are initialized.
+    Sets up a comprehensive logging system that includes:
+    1. File-based logging with timestamped files
+    2. Console output for real-time monitoring
+    3. Optional experiment tracking integration (pico by default supports Weights & Biases)
+
+    Args:
+        training_config: Configuration object containing logging settings.
+            Must have:
+            - run_name (str): Name of the current run
+            - logging.experiment_tracker (str): Type of experiment tracker ("wandb" or None)
+            - logging.wandb_project (str, optional): W&B project name if using wandb
+            - logging.wandb_entity (str, optional): W&B entity name if using wandb
+
+    Returns:
+        tuple: (logger, experiment_tracker)
+            - logger: Standard Python logger configured for file and console output
+            - experiment_tracker: Optional experiment tracking logger (e.g., WandbLogger)
     """
 
     # ---- Standard Local Logger ---- #
@@ -333,10 +457,30 @@ def initialize_logging(training_config: TrainingConfig):
 
 
 def initialize_checkpointing(training_config: TrainingConfig):
-    """
-    Initialize any checkpointing functionality. The main thing right now is setting up
-    HuggingFace repos for storing model checkpoints, but this could be extended to other
-    checkpointing backends in the future.
+    """Initialize model checkpointing functionality.
+
+    Sets up the infrastructure for saving model checkpoints, with support for
+    pushing checkpoints to HuggingFace Hub. Creates necessary repositories
+    and branches if they don't exist.
+
+    Directory Structure:
+        RUNS_DIR/
+        └── {run_name}/
+            └── CHECKPOINT_DIR/
+                └── step_{step_number}/
+                    └── ...
+
+    Args:
+        training_config: Configuration object containing checkpointing settings
+            (HuggingFace repo ID, etc.).
+
+    Raises:
+        RuntimeError: If unable to create HuggingFace repository after multiple attempts.
+
+    Notes:
+        - Creates HuggingFace repository if it doesn't exist
+        - Creates a branch named after the run
+        - Sets up local repository for pushing checkpoints
     """
 
     huggingface_repo_id = training_config.checkpointing.save_checkpoint_repo_id

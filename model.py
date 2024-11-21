@@ -1,16 +1,26 @@
 """
-Beep boop - this is the model file aka. the brain of Pico.
+Beep Boop - this is the Pico Model: a lightweight transformer-based language model. Pico uses a
+a simple LLAMA-style transformer architecture, written for clarity and educational purposes.
 
-So what model does Pico use? Basically, it's a LLAMA-esque model with a few twists, implemented
-in a way that is simple, flexible, and most importantly easy to understand.
+Everything is written with a modular design for easy modification and experimentation.
 
-Build on top of this however you like. Fork this repo, and make this your own. Hate RoPE? All good,
-swap it out with something else. I've made the code easy on purpose so that you don't have to look
-at 10,000 lines of code to find where the attention is computed.
+Key features:
+- RMSNorm for layer normalization
+- Rotary Positional Embeddings (RoPE)
+- Multi-head attention with KV-cache support
+- SwiGLU activation function
+- Residual connections throughout
 
-Adapted and simplified from:
-OLMO: https://github.com/allenai/OLMo/blob/main/olmo/model.py
-LLAMA 3: https://github.com/meta/llama-3/blob/main/model.py
+- KV-cache for faster autoregressive generation
+
+References:
+    - RoPE: https://arxiv.org/abs/2104.09864
+    - SwiGLU: https://arxiv.org/abs/2002.05202
+    - LLAMA: https://arxiv.org/abs/2302.13971
+
+Adapted from:
+    - OLMO: https://github.com/allenai/OLMo
+    - LLAMA: https://github.com/meta/llama
 """
 
 import math
@@ -33,15 +43,35 @@ import lightning as L
 
 
 class RMSNorm(torch.nn.Module):
+    """Root Mean Square Layer Normalization.
+
+    A variant of Layer Normalization that uses RMS statistics instead of mean/variance,
+    resulting in improved stability and performance.
+
+    Args:
+        config (ModelConfig): Configuration object containing normalization parameters
+            - config.norm.eps: Small constant for numerical stability
+            - config.d_model: Model dimension for the weight parameter
+
+    References:
+        https://arxiv.org/abs/1910.07467
+    """
+
     def __init__(self, config: ModelConfig):
         super().__init__()
         self.eps = config.norm.eps
         self.weight = nn.Parameter(torch.ones(config.d_model))
 
-    def _norm(self, x):
+    def _norm(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Normalizes the input tensor by its RMS value.
+        """
         return x * torch.rsqrt(x.pow(2).mean(-1, keepdim=True) + self.eps)
 
-    def forward(self, x):
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        """
+        Applies RMS normalization to the input tensor and scales it by the weight parameter.
+        """
         output = self._norm(x.float()).type_as(x)
         return output * self.weight
 
@@ -54,19 +84,27 @@ class RMSNorm(torch.nn.Module):
 
 
 class RoPE(nn.Module):
-    """
-    [Rotary positional embeddings (RoPE)](https://arxiv.org/abs/2104.09864).
+    """Rotary Positional Embeddings (RoPE).
 
-    Mostly taken from LLaMA 3 implementation.
+    Implements position-dependent rotation of keys and queries in attention mechanism,
+    allowing better modeling of relative positions in sequences. Uses complex number
+    operations for efficient rotation.
+
+    Args:
+        config (ModelConfig): Model configuration containing:
+            - config.position_emb.theta: Base for frequency computation
+            - config.d_model: Model dimension
+            - config.attention.n_heads: Number of attention heads
+            - config.max_seq_len: Maximum sequence length
+        fabric (L.Fabric): Lightning Fabric instance for device management
+
+    References:
+        https://arxiv.org/abs/2104.09864
     """
 
     _freqs_cis: torch.Tensor = None
 
-    # TODO: implement config
     def __init__(self, config: ModelConfig, fabric: L.Fabric):
-        """
-        Rotary positional embeddings (RoPE).
-        """
         super().__init__()
 
         self.fabric = fabric
@@ -124,7 +162,7 @@ class RoPE(nn.Module):
         """
         Applies the rotary positional embeddings to the input tensors via complex num multiplication
 
-        The start_pos is used to l
+        NOTE: The start_pos is used during inference to only apply the RoPE embeddings to the new tokens.
         """
         queries_ = torch.view_as_complex(
             queries.float().reshape(*queries.shape[:-1], -1, 2)
@@ -151,6 +189,27 @@ class RoPE(nn.Module):
 
 
 class Attention(nn.Module):
+    """Multi-head Attention with Group Query Attention support.
+
+    Implements scaled dot-product attention and supports:
+    - Grouped Query Attention (GQA)
+    - Key-Value caching for efficient inference
+    - RoPE integration
+
+    Args:
+        config (ModelConfig): Configuration containing:
+            - config.attention.n_heads: Number of attention heads
+            - config.attention.n_kv_heads: Number of key/value heads
+            - config.d_model: Model dimension
+            - config.batch_size: Maximum batch size
+            - config.max_seq_len: Maximum sequence length
+        fabric (L.Fabric): Lightning Fabric instance
+
+    Shape:
+        - Input: (batch_size, seq_len, d_model)
+        - Output: (batch_size, seq_len, d_model)
+    """
+
     def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
 
@@ -180,8 +239,12 @@ class Attention(nn.Module):
 
     def repeat_kv(self, original_tensor: torch.Tensor) -> torch.Tensor:
         """
-        Repeats the keys and values for the attention mechanism.
+        Repeats key/value heads to match query heads in Group Query Attention (GQA).
+
+        In GQA, we use fewer key/value heads than query heads to reduce memory usage.
+        Each key/value head needs to be repeated to match the number of query heads.
         """
+
         bsz, seq_len, n_kv_heads, head_dim = original_tensor.shape
         if self.n_rep == 1:
             return original_tensor
@@ -202,13 +265,6 @@ class Attention(nn.Module):
         inference_mode: Optional[bool] = False,
         start_pos: Optional[int] = 0,
     ):
-        """
-        Args:
-            input: input tensor of shape (batch_size, sequence_length, d_model)
-            mask: attention mask of shape (batch_size, sequence_length, sequence_length)
-            inference_mode: whether to use inference mode; in this mode, we enable use of the cache
-            start_pos: start position of the sequence, ignored unless inference_mode is enabled
-        """
         bsz, seq_len, _ = input.shape
         _queries, _keys, _values = (
             self.q_proj(input),
@@ -273,6 +329,20 @@ class Attention(nn.Module):
 
 
 class SwiGLU(nn.Module):
+    """SwiGLU Activation Function with Linear Projections.
+
+    Implements the SwiGLU activation function combined with linear transformations,
+    serving as the feed-forward network in transformer blocks.
+
+    Args:
+        config (ModelConfig): Configuration containing:
+            - config.d_model: Model dimension
+            - config.activation.act_hidden_dim: Hidden dimension (typically 4 * d_model)
+
+    References:
+        https://arxiv.org/abs/2002.05202
+    """
+
     def __init__(self, config: ModelConfig):
         super().__init__()
 
@@ -295,6 +365,17 @@ class SwiGLU(nn.Module):
 
 
 class PicoBlock(nn.Module):
+    """Single Transformer Block with Attention and Feed-forward layers.
+
+    Implements a standard transformer block with:
+    - Multi-head attention with normalization and residual connection
+    - SwiGLU feed-forward network with normalization and residual connection
+
+    Args:
+        config (ModelConfig): Model configuration
+        fabric (L.Fabric): Lightning Fabric instance
+    """
+
     def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
 
@@ -318,6 +399,32 @@ class PicoBlock(nn.Module):
 
 
 class Pico(nn.Module):
+    """The Pico model implements a LLAMA-style architecture.
+
+    Architecture Components:
+        1. Input Processing
+            - Token embeddings for vocabulary representation
+            - Rotary Positional Embeddings (RoPE) for position encoding
+
+        2. Transformer Blocks (repeated n_layers times)
+            - Multi-head attention with optional Group Query Attention (GQA)
+            - RMSNorm for improved stability
+            - SwiGLU activation in feed-forward networks
+            - Residual connections throughout
+
+        3. Output Processing
+            - Final RMSNorm layer
+            - Linear projection to vocabulary size
+    Args:
+        config (ModelConfig): Complete model configuration
+        fabric (L.Fabric): Lightning Fabric instance for device management
+
+    Example:
+        >>> config = ModelConfig(vocab_size=32000, n_layers=12)
+        >>> model = Pico(config, fabric)
+        >>> output = model(input_ids, inference_mode=False)
+    """
+
     def __init__(self, config: ModelConfig, fabric: L.Fabric):
         super().__init__()
         self.config = config
