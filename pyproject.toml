@@ -1,8 +1,8 @@
 [tool.poetry]
-name = "pico"
+name = "relora-pico"
 version = "0.1.0"
-description = "A framework for training small language models and analyzing their learning dynamics"
-authors = ["Richard Diehl Martinez <richarddiehl@gmail.com>"]
+description = "A framework for training small language models and analyzing their learning dynamics. Includes ReLoRA."
+authors = ["Richard Diehl Martinez <richarddiehl@gmail.com>", "Yuval Weiss <yw580@cam.ac.uk>"]
 license = "Apache 2.0"
 readme = "README.md"
 
