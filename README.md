@@ -4,7 +4,7 @@ Framework for training tiny language models and studying their learning dynamics
 
 ## Fork
 
-This fork implements [ReLoRA](https://github.com/Guitaricet/relora)
+This fork implements [ReLoRA](https://github.com/Guitaricet/relora) for pico.
 
 ### ReLoRA
 
