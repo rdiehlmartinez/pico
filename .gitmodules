@@ -1,0 +1,3 @@
+[submodule "lib/olmo-eval"]
+	path = lib/olmo-eval
+	url = https://github.com/allenai/OLMo-Eval.git
