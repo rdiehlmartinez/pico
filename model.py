@@ -30,13 +30,16 @@ import torch.backends.cuda
 import torch.nn as nn
 import torch.nn.functional as F
 
+from dataclasses import asdict
 
-from typing import Tuple, Optional, TYPE_CHECKING
+from typing import Dict, Any, Tuple, Optional, TYPE_CHECKING
 
 if TYPE_CHECKING:
     # We need to do this to avoid importing these when creating the HF-compatible models
     from config import ModelConfig
     import lightning as L
+
+from transformers import PretrainedConfig, PreTrainedModel
 
 ########################################################
 #
@@ -122,8 +125,6 @@ class RoPE(nn.Module):
             RoPE._freqs_cis = self._setup_freqs_cis(max_seq_len, self.theta, self.dim)
             if fabric is not None:
                 RoPE._freqs_cis = fabric.to_device(RoPE._freqs_cis)
-            else:
-                RoPE._freqs_cis = RoPE._freqs_cis.to(self.device)
 
     @classmethod
     def _setup_freqs_cis(cls, seq_len: int, theta: float, dim: int) -> torch.Tensor:
@@ -179,6 +180,11 @@ class RoPE(nn.Module):
         freqs_end_pos = freqs_start_pos + queries_.shape[1]
 
         freqs_cis = self.get_freqs_cis(input_shape, freqs_start_pos, freqs_end_pos)
+        # if fabric is set, freqs_cis is already on the correct device
+        # otherwise, we need to move it to the correct device
+        if self.fabric is None:
+            freqs_cis = freqs_cis.to(queries.device)
+
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
         return queries_rotated.type_as(queries), keys_rotated.type_as(keys)
@@ -388,6 +394,23 @@ class PicoBlock(nn.Module):
 class Pico(nn.Module):
     """Core Pico implementation."""
 
+    @staticmethod
+    def flatten_config(model_config: "ModelConfig") -> Dict[str, Any]:
+        """Flatten the model config into a dictionary."""
+
+        def flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
+            items = {}
+            for k, v in d.items():
+                new_key = f"{prefix}{k}" if prefix else k
+                if isinstance(v, dict):
+                    items.update(flatten_dict(v, f"{new_key}_"))
+                else:
+                    items[new_key] = v
+            return items
+
+        config_dict = asdict(model_config)
+        return flatten_dict(config_dict)
+
     def __init__(self, config: "ModelConfig", fabric: Optional["L.Fabric"] = None):
         super().__init__()
         self.config = config
@@ -472,81 +495,46 @@ class Pico(nn.Module):
         return logits, cached_key_values
 
 
-# ########################################################
-# #
-# # PicoConfig and PicoForHF
-# #
-# ########################################################
+########################################################
+#
+# PicoConfig and PicoForHF
+#
+########################################################
 
 
-# class PicoHFConfig(PretrainedConfig):
-#     """HuggingFace config for Pico model."""
+class PicoHFConfig(PretrainedConfig):
+    """HuggingFace config for Pico model."""
 
-#     model_type = "pico"
+    model_type = "pico"
 
-#     @classmethod
-#     def from_dataclass(cls, model_config: "ModelConfig", **kwargs):
-#         """Create config from ModelConfig dataclass."""
-
-#         def flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
-#             items = {}
-#             for k, v in d.items():
-#                 new_key = f"{prefix}{k}" if prefix else k
-#                 if isinstance(v, dict):
-#                     items.update(flatten_dict(v, f"{new_key}_"))
-#                 else:
-#                     items[new_key] = v
-#             return items
-
-#         config_dict = asdict(model_config)
-#         config_flattened = flatten_dict(config_dict)
-#         return cls(**config_flattened, **kwargs)
+    @classmethod
+    def from_dataclass(cls, model_config: "ModelConfig", **kwargs):
+        """Create config from ModelConfig dataclass."""
+        config_flattened = Pico.flatten_config(model_config)
+        return cls(**config_flattened, **kwargs)
 
 
-# class PicoForHF(PreTrainedModel):
-#     """HuggingFace wrapper for Pico model."""
+class PicoHF(PreTrainedModel):
+    """HuggingFace wrapper for Pico model."""
 
-#     config_class = PicoHFConfig
-#     _no_split_modules = ["PicoBlock", "Attention", "SwiGLU", "RMSNorm"]
+    config_class = PicoHFConfig
+    _no_split_modules = ["PicoBlock", "Attention", "SwiGLU", "RMSNorm"]
 
-#     def __init__(self, config: PicoHFConfig):
-#         super().__init__(config)
-#         self.config = config
-#         self.pico = Pico(model_config)
+    def __init__(self, config: PicoHFConfig):
+        super().__init__(config)
+        self.pico = Pico(config)
 
-#     def forward(
-#         self,
-#         input_ids: torch.Tensor,
-#         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
-#         use_cache: bool = False,
-#         **kwargs,
-#     ) -> Union[torch.Tensor, Tuple[torch.Tensor, Tuple[Tuple[torch.Tensor]]]]:
-#         """
-#         Args:
-#             input_ids: Input token IDs
-#             past_key_values: Cached KV pairs from previous forward passes
-#             use_cache: Whether to return cached KV pairs for next forward pass
-#         Returns:
-#             If use_cache=False: logits
-#             If use_cache=True: (logits, past_key_values)
-#         """
-#         # Calculate start position from past cache if it exists
-#         cache_start_pos = (
-#             past_key_values[0][0].shape[1] if past_key_values is not None else 0
-#         )
-
-#         outputs = self.pico(
-#             input_ids=input_ids,
-#             past_key_values=past_key_values,
-#             use_cache=use_cache,
-#         )
-
-#         if use_cache:
-#             return CausalLMOutputWithPast(logits=outputs[0], past_key_values=outputs[1])
-#         return CausalLMOutput(logits=outputs)
+    def forward(
+        self,
+        input_ids: torch.Tensor,
+        past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
+        use_cache: bool = False,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, Optional[Tuple[Tuple[torch.Tensor]]]]:
+        return self.pico(input_ids, past_key_values, use_cache)
 
 
-# # Register for auto classes
-# PicoHFConfig.register_for_auto_class()
-# PicoHFModel.register_for_auto_class("AutoModel")
-# PicoHFModel.register_for_auto_class("AutoModelForCausalLM")
+# Register for auto classes
+PicoHFConfig.register_for_auto_class()
+PicoHF.register_for_auto_class("AutoModel")
+PicoHF.register_for_auto_class("AutoModelForCausalLM")
