@@ -16,12 +16,13 @@ click = "^8.1.7"
 wandb = "^0.18.1"
 huggingface-hub = {extras = ["cli"], version = "^0.25.1"}
 torch = { version = "2.5.0+cu121", source = "custom_torch"}
+jsonnet = "^0.20.0"
+virtualenv = "^20.27.1"
 
 [[tool.poetry.source]]
 name = "custom_torch"
 url = "https://download.pytorch.org/whl/cu121"
 priority = "explicit"
-
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"

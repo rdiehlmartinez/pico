@@ -30,15 +30,18 @@ from model import Pico
 from utils.initialization import (
     initialize_run_dir,
     initialize_fabric,
-    initialize_config,
+    initialize_configuration,
     initialize_dataset,
+    initialize_tokenizer,
     initialize_dataloader,
     initialize_lr_scheduler,
     initialize_checkpointing,
     initialize_logging,
     initialize_optimizer,
 )
-from utils.checkpointing import load_checkpoint, save_checkpoint, save_config
+from utils.checkpointing import load_checkpoint, save_checkpoint
+
+from utils.evaluation import run_evaluation
 
 
 @click.command()
@@ -75,7 +78,7 @@ def main(config_path: str):
 
 
     Example:
-        $ python train.py --config_path configs/training_config.yaml
+        $ python train.py --config_path configs/my_config.yaml
     """
 
     ########################################################
@@ -85,12 +88,15 @@ def main(config_path: str):
     ########################################################
 
     # ---- Setup Configs ---- #
-    data_config, model_config, training_config, evaluation_config = initialize_config(
-        config_path
-    )
+    sub_configs = initialize_configuration(config_path)
+
+    data_config = sub_configs["data"]
+    model_config = sub_configs["model"]
+    training_config = sub_configs["training"]
+    evaluation_config = sub_configs["evaluation"]
 
     # ---- Setup Run Directory ---- #
-    initialize_run_dir(training_config)
+    initialize_run_dir(training_config, evaluation_config)
 
     # ---- Setup Logger ---- #
     logger, experiment_tracker = initialize_logging(training_config)
@@ -105,10 +111,12 @@ def main(config_path: str):
     # ---- Setup Dataset, Tokenizer, and Dataloader ---- #
 
     train_dataset = initialize_dataset(data_config)
+    tokenizer = initialize_tokenizer(data_config)
     train_dataloader = initialize_dataloader(data_config, train_dataset)
 
     # ---- Setup Model, Optimizer, and Dataloaders ---- #
     model = Pico(model_config, fabric)
+
     optimizer = initialize_optimizer(model, training_config)
     lr_scheduler = initialize_lr_scheduler(optimizer, training_config)
 
@@ -128,7 +136,7 @@ def main(config_path: str):
 
     if should_load_checkpoint:
         resume_checkpoint = load_checkpoint(
-            fabric, training_config, model, optimizer, lr_scheduler, train_dataloader
+            training_config, fabric, model, optimizer, lr_scheduler, train_dataloader
         )
 
         if resume_checkpoint is None:
@@ -148,14 +156,14 @@ def main(config_path: str):
     if should_start_from_scratch:
         train_start_step = 0
         train_iterator = iter(train_dataloader)
-        save_config(fabric, training_config, model_config, evaluation_config)
 
     save_checkpoint(
+        sub_configs,
         fabric,
-        training_config,
         model,
         optimizer,
         lr_scheduler,
+        tokenizer,
         train_start_step,
         upload_logs=False,
     )
@@ -168,6 +176,8 @@ def main(config_path: str):
 
     if train_start_step < training_config.training_steps:
         log(f"Training from step {train_start_step}")
+
+    # TODO: Add check if training_steps is greater than training_config.training_steps
 
     gradient_step = train_start_step
     # Loss tracking over log_every_n_steps interval
@@ -185,7 +195,12 @@ def main(config_path: str):
         input_ids = _input_ids[:, :-1]
         labels = _input_ids[:, 1:]
 
-        model_output = model(input_ids).transpose(1, 2)
+        # ---- Model Forward Pass ---- #
+        # NOTE: the model returns a tuple of (logits, past_key_values); we only need the logits
+        model_output, _ = model(input_ids)
+
+        # transpose the output to match the shape of the labels for the loss function
+        model_output = model_output.transpose(1, 2)
 
         # ---- Gradient Accumulation (if enabled) ---- #
         should_accumulate_gradients = (
@@ -262,17 +277,31 @@ def main(config_path: str):
 
         gradient_step += 1
 
-        # ---- Checkpointing ---- #
+        # ---- Checkpointing and Evaluation ---- #
         # Maybe save checkpoint
         if gradient_step % training_config.checkpointing.save_every_n_steps == 0:
             log(f"Saving checkpoint at step {gradient_step}")
             save_checkpoint(
-                fabric, training_config, model, optimizer, lr_scheduler, gradient_step
+                sub_configs,
+                fabric,
+                model,
+                optimizer,
+                lr_scheduler,
+                tokenizer,
+                gradient_step,
             )
 
-        # --- Evaluation --- #
-        if gradient_step % evaluation_config.eval_every_n_steps == 0:
-            log("Starting Evaluation!")
+            evaluation_results = run_evaluation(evaluation_config)
+            if evaluation_results is not None:
+                for metric, result in evaluation_results.items():
+                    fabric.log(metric, result, step=gradient_step)
+                formatted_results = "\n".join(
+                    [
+                        f"  {metric}: {result:.4f}"
+                        for metric, result in evaluation_results.items()
+                    ]
+                )
+                log(f"Evaluation results:\n{formatted_results}")
 
         # --- Break Training Condition --- #
         if gradient_step == training_config.training_steps:
@@ -280,11 +309,12 @@ def main(config_path: str):
             if gradient_step % training_config.checkpointing.save_every_n_steps != 0:
                 log(f"Saving final checkpoint at step {gradient_step}")
                 save_checkpoint(
+                    sub_configs,
                     fabric,
-                    training_config,
                     model,
                     optimizer,
                     lr_scheduler,
+                    tokenizer,
                     gradient_step,
                 )
             break
@@ -292,11 +322,28 @@ def main(config_path: str):
     if gradient_step < training_config.training_steps:
         log(f"Training finished early at step {gradient_step}", level=logging.WARNING)
         save_checkpoint(
-            fabric, training_config, model, optimizer, lr_scheduler, gradient_step
+            sub_configs,
+            fabric,
+            model,
+            optimizer,
+            lr_scheduler,
+            tokenizer,
+            gradient_step,
         )
 
     # --- Final Evaluation --- #
     log("Starting Final Evaluation!")
+    evaluation_results = run_evaluation(evaluation_config)
+    if evaluation_results is not None:
+        for metric, result in evaluation_results.items():
+            fabric.log(metric, result, step=gradient_step)
+        formatted_results = "\n".join(
+            [
+                f"  {metric}: {result:.4f}"
+                for metric, result in evaluation_results.items()
+            ]
+        )
+        log(f"Final Evaluation results:\n{formatted_results}")
 
 
 if __name__ == "__main__":

@@ -15,14 +15,18 @@ Some things to NOTE:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 2048
-BATCH_SIZE = 1024
+BATCH_SIZE = 2
 GRADIENT_ACCUMULATION_STEPS = (
-    128  # NOTE: Play with this to make the batch size fit in memory.
+    1  # NOTE: Play with this to make the batch size fit in memory.
 )
+# BATCH_SIZE = 1024
+# GRADIENT_ACCUMULATION_STEPS = (
+#     128  # NOTE: Play with this to make the batch size fit in memory.
+# )
 
 # N.B. The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
 
@@ -34,27 +38,6 @@ GRADIENT_ACCUMULATION_STEPS = (
 
 
 @dataclass
-class _RoPEConfig:
-    theta: float = 10000.0
-
-
-@dataclass
-class _RMSNormConfig:
-    eps: float = 1e-6
-
-
-@dataclass
-class _ActivationConfig:
-    act_hidden_dim: int = 768
-
-
-@dataclass
-class _AttentionConfig:
-    n_heads: int = 12
-    n_kv_heads: Optional[int] = 4
-
-
-@dataclass
 class ModelConfig:
     d_model: int = 192
     n_layers: int = 12
@@ -63,10 +46,14 @@ class ModelConfig:
     batch_size: int = BATCH_SIZE
     max_seq_len: int = MAX_SEQ_LEN
 
-    attention: _AttentionConfig = field(default_factory=_AttentionConfig)
-    activation: _ActivationConfig = field(default_factory=_ActivationConfig)
-    norm: _RMSNormConfig = field(default_factory=_RMSNormConfig)
-    position_emb: _RoPEConfig = field(default_factory=_RoPEConfig)
+    attention_n_heads: int = 12
+    attention_n_kv_heads: Optional[int] = 4
+
+    activation_hidden_dim: int = 768
+
+    norm_eps: float = 1e-6
+
+    position_emb_theta: float = 10000.0
 
 
 ########################################################
@@ -177,6 +164,22 @@ class TrainingConfig:
 
 
 @dataclass
+class _PalomaEvaluationConfig:
+    limit_eval_examples: Optional[int] = 1
+    max_length: int = MAX_SEQ_LEN
+
+
+@dataclass
 class EvaluationConfig:
-    eval_every_n_steps: int = 100
-    eval_batch_size: int = 1024
+    # Name of the run to evaluate
+    run_name: Optional[str] = None
+
+    # Path to load a checkpoint from a local path
+    checkpoint_path: Optional[str] = None
+
+    # Evaluation metrics to compute: by default, we compute the perplexity of the model
+    evaluation_metrics: List[str] = field(default_factory=lambda: ["paloma"])
+
+    # NOTE: Add other evaluation configs here
+    # Each evaluation metric should have its own config
+    paloma: _PalomaEvaluationConfig = field(default_factory=_PalomaEvaluationConfig)

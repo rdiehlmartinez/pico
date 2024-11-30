@@ -1302,6 +1302,16 @@ files = [
 ]
 
 [[package]]
+name = "jsonnet"
+version = "0.20.0"
+description = "Python bindings for Jsonnet - The data templating language"
+optional = false
+python-versions = "*"
+files = [
+    {file = "jsonnet-0.20.0.tar.gz", hash = "sha256:7e770c7bf3a366b97b650a39430450f77612e74406731eb75c5bd59f3f104d4f"},
+]
+
+[[package]]
 name = "jsonpointer"
 version = "3.0.0"
 description = "Identify specific nodes in a JSON document (RFC 6901)"
@@ -4680,4 +4690,4 @@ propcache = ">=0.2.0"
 [metadata]
 lock-version = "2.0"
 python-versions = "^3.10"
-content-hash = "3390680e587c0e64bfd2b7451b74863e997add7366dd6b1133329535aef8da3f"
+content-hash = "c9fc7b4c75d524ccd59fd95fa01761029c495a6b5f0c323a3fbed6514350b26f"

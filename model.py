@@ -31,13 +31,16 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dataclasses import asdict
+from typing import Union, Tuple, Optional, TYPE_CHECKING, Dict, Any
 
-from typing import Dict, Any, Tuple, Optional, TYPE_CHECKING
+try:
+    if TYPE_CHECKING:
+        # We need to do this to avoid importing these when creating the HF-compatible models
+        from config import ModelConfig
+        import lightning as L
+except ImportError:
+    pass
 
-if TYPE_CHECKING:
-    # We need to do this to avoid importing these when creating the HF-compatible models
-    from config import ModelConfig
-    import lightning as L
 
 from transformers import PretrainedConfig, PreTrainedModel
 
@@ -55,15 +58,15 @@ class RMSNorm(torch.nn.Module):
     resulting in improved stability and performance.
 
     Args:
-        config (ModelConfig): Configuration object containing normalization parameters
-            - config.norm.eps: Small constant for numerical stability
+        config (Union[ModelConfig, PicoHFConfig]): Configuration object containing normalization parameters
+            - config.norm_eps: Small constant for numerical stability
             - config.d_model: Model dimension for the weight parameter
 
     References:
         https://arxiv.org/abs/1910.07467
     """
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Union["ModelConfig", "PicoHFConfig"]):
         super().__init__()
         self.eps = config.norm_eps
         self.weight = nn.Parameter(torch.ones(config.d_model))
@@ -97,10 +100,10 @@ class RoPE(nn.Module):
     operations for efficient rotation.
 
     Args:
-        config (ModelConfig): Model configuration containing:
-            - config.position_emb.theta: Base for frequency computation
+        config (Union[ModelConfig, PicoHFConfig]): Model configuration containing:
+            - config.position_emb_theta: Base for frequency computation
             - config.d_model: Model dimension
-            - config.attention.n_heads: Number of attention heads
+            - config.attention_n_heads: Number of attention heads
             - config.max_seq_len: Maximum sequence length
         fabric (L.Fabric): Lightning Fabric instance for device management
 
@@ -110,7 +113,9 @@ class RoPE(nn.Module):
 
     _freqs_cis: torch.Tensor = None
 
-    def __init__(self, config: "ModelConfig", fabric: "L.Fabric" = None):
+    def __init__(
+        self, config: Union["ModelConfig", "PicoHFConfig"], fabric: "L.Fabric" = None
+    ):
         super().__init__()
 
         self.fabric = fabric
@@ -148,7 +153,6 @@ class RoPE(nn.Module):
         Reshapes the frequency tensor to be broadcastable with the input tensor.
         """
         _freqs_cis = RoPE._freqs_cis[start_pos:end_pos]
-
         ndim = len(input_shape)
         assert 0 <= 1 < ndim
         assert _freqs_cis.shape == (input_shape[1], input_shape[-1])
@@ -182,8 +186,8 @@ class RoPE(nn.Module):
         freqs_cis = self.get_freqs_cis(input_shape, freqs_start_pos, freqs_end_pos)
         # if fabric is set, freqs_cis is already on the correct device
         # otherwise, we need to move it to the correct device
-        if self.fabric is None:
-            freqs_cis = freqs_cis.to(queries.device)
+        if self.fabric is not None:
+            freqs_cis = self.fabric.to_device(freqs_cis)
 
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
@@ -206,9 +210,9 @@ class Attention(nn.Module):
     - RoPE integration
 
     Args:
-        config (ModelConfig): Configuration containing:
-            - config.attention.n_heads: Number of attention heads
-            - config.attention.n_kv_heads: Number of key/value heads
+        config (Union[ModelConfig, PretrainedConfig]): Configuration containing:
+            - config.attention_n_heads: Number of attention heads
+            - config.attention_n_kv_heads: Number of key/value heads
             - config.d_model: Model dimension
             - config.batch_size: Maximum batch size
             - config.max_seq_len: Maximum sequence length
@@ -219,7 +223,11 @@ class Attention(nn.Module):
         - Output: (batch_size, seq_len, d_model)
     """
 
-    def __init__(self, config: ModelConfig, fabric: Optional["L.Fabric"] = None):
+    def __init__(
+        self,
+        config: Union["ModelConfig", "PicoHFConfig"],
+        fabric: Optional["L.Fabric"] = None,
+    ):
         super().__init__()
 
         self.fabric = fabric
@@ -267,7 +275,7 @@ class Attention(nn.Module):
         start_pos = past_key_values[0].shape[1] if past_key_values is not None else 0
 
         # apply rotary positional embeddings
-        queries, keys = self.rope(_queries, _keys, start_pos)
+        queries, keys = self.rope(queries, keys, start_pos)
 
         if past_key_values is not None:
             keys = torch.cat([past_key_values[0], keys], dim=1)
@@ -315,15 +323,15 @@ class SwiGLU(nn.Module):
     serving as the feed-forward network in transformer blocks.
 
     Args:
-        config (ModelConfig): Configuration containing:
+        config (Union[ModelConfig, PicoHFConfig]): Configuration containing:
             - config.d_model: Model dimension
-            - config.activation.hidden_dim: Hidden dimension (typically 4 * d_model)
+            - config.activation_hidden_dim: Hidden dimension (typically 4 * d_model)
 
     References:
         https://arxiv.org/abs/2002.05202
     """
 
-    def __init__(self, config: ModelConfig):
+    def __init__(self, config: Union["ModelConfig", "PicoHFConfig"]):
         super().__init__()
 
         model_dim = config.d_model
@@ -352,11 +360,16 @@ class PicoBlock(nn.Module):
     - SwiGLU feed-forward network with normalization and residual connection
 
     Args:
-        config (ModelConfig): Model configuration
+        config (Union[ModelConfig, PicoHFConfig]): Model configuration; either a dataclass or
+            a HuggingFace PicoHFConfig
         fabric (L.Fabric): Lightning Fabric instance
     """
 
-    def __init__(self, config: ModelConfig, fabric: Optional["L.Fabric"] = None):
+    def __init__(
+        self,
+        config: Union["ModelConfig", "PicoHFConfig"],
+        fabric: Optional["L.Fabric"] = None,
+    ):
         super().__init__()
 
         self.attention = Attention(config, fabric)
@@ -394,24 +407,11 @@ class PicoBlock(nn.Module):
 class Pico(nn.Module):
     """Core Pico implementation."""
 
-    @staticmethod
-    def flatten_config(model_config: "ModelConfig") -> Dict[str, Any]:
-        """Flatten the model config into a dictionary."""
-
-        def flatten_dict(d: Dict[str, Any], prefix: str = "") -> Dict[str, Any]:
-            items = {}
-            for k, v in d.items():
-                new_key = f"{prefix}{k}" if prefix else k
-                if isinstance(v, dict):
-                    items.update(flatten_dict(v, f"{new_key}_"))
-                else:
-                    items[new_key] = v
-            return items
-
-        config_dict = asdict(model_config)
-        return flatten_dict(config_dict)
-
-    def __init__(self, config: "ModelConfig", fabric: Optional["L.Fabric"] = None):
+    def __init__(
+        self,
+        config: Union["ModelConfig", "PicoHFConfig"],
+        fabric: Optional["L.Fabric"] = None,
+    ):
         super().__init__()
         self.config = config
         self.fabric = fabric
@@ -424,6 +424,19 @@ class Pico(nn.Module):
         self.de_embedding_proj = nn.Linear(
             config.d_model, config.vocab_size, bias=False
         )
+
+    def convert_to_hf_model(self) -> "PicoHF":
+        """Convert the Lightning model to a HuggingFace model."""
+        # Create HF config without fabric-specific settings
+        hf_config = PicoHFConfig.from_dataclass(self.config)
+
+        # Create new HF model
+        hf_model = PicoHF(hf_config)
+
+        # Copy state dict, excluding fabric-specific keys
+        hf_model.load_state_dict(self.state_dict(prefix="pico."))
+
+        return hf_model
 
     def forward(
         self,
@@ -508,10 +521,29 @@ class PicoHFConfig(PretrainedConfig):
     model_type = "pico"
 
     @classmethod
-    def from_dataclass(cls, model_config: "ModelConfig", **kwargs):
-        """Create config from ModelConfig dataclass."""
-        config_flattened = Pico.flatten_config(model_config)
-        return cls(**config_flattened, **kwargs)
+    def from_dict(cls, config_dict: Dict[str, Any], **kwargs) -> "PicoHFConfig":
+        # NOTE The typical from_dict method doesn't actually set the attributes unless they are
+        # defined in the constructor.
+
+        pico_config = cls(**kwargs)
+
+        # Because this class is just a wrapper around the ModelConfig dataclass, we need to do
+        # a little extra work to ensure that the attributes are actually set.
+        for key, value in config_dict.items():
+            setattr(pico_config, key, value)
+
+        return_unused_kwargs = kwargs.pop("return_unused_kwargs", False)
+        unused_kwargs = {
+            key: value for key, value in kwargs.items() if not hasattr(pico_config, key)
+        }
+
+        if return_unused_kwargs:
+            return pico_config, unused_kwargs
+        return pico_config
+
+    @classmethod
+    def from_dataclass(cls, model_config: "ModelConfig"):
+        return cls.from_dict(asdict(model_config))
 
 
 class PicoHF(PreTrainedModel):
