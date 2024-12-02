@@ -1,5 +1,5 @@
 """
-Welcome to the Pico Config File!
+The Pico Config File!
 
 This is where you can specify the hyperparameters for the Pico model, the dataset, the training
 process, evaluation yada yada.
@@ -19,16 +19,12 @@ from typing import Optional, List
 
 VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 2048
-BATCH_SIZE = 2
+BATCH_SIZE = 1024
 GRADIENT_ACCUMULATION_STEPS = (
-    1  # NOTE: Play with this to make the batch size fit in memory.
+    128  # NOTE: Play with this to make the batch size fit in memory.
 )
-# BATCH_SIZE = 1024
-# GRADIENT_ACCUMULATION_STEPS = (
-#     128  # NOTE: Play with this to make the batch size fit in memory.
-# )
 
-# N.B. The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
+# NOTE! The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
 
 ########################################################
 #
@@ -176,6 +172,10 @@ class EvaluationConfig:
 
     # Path to load a checkpoint from a local path
     checkpoint_path: Optional[str] = None
+
+    # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
+    # Should be in the format of <(username or )>/<repo_name>, e.g. pico-lm/pico-7b
+    save_checkpoint_repo_id: Optional[str] = "pico-lm/demo"
 
     # Evaluation metrics to compute: by default, we compute the perplexity of the model
     evaluation_metrics: List[str] = field(default_factory=lambda: ["paloma"])

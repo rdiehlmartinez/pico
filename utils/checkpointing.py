@@ -9,8 +9,8 @@ import os
 import yaml
 from huggingface_hub import upload_folder
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
-
-from . import RUNS_DIR, CHECKPOINT_DIR, FABRIC_CHECKPOINT_DIR
+import json
+from . import RUNS_DIR, CHECKPOINT_DIR, FABRIC_CHECKPOINT_DIR, EVAL_RESULTS_DIR, LOG_DIR
 
 
 def load_checkpoint(
@@ -101,7 +101,7 @@ def save_checkpoint(
     - Tokenizer files (vocab.json, merges.txt)
     - Fabric-specific files (config.yaml, model.pt, optimizer.pt, training.pt)
 
-    Note that the HuggingFace model files are saved at the root checkpoint directory, while the
+    Note that the HuggingFace model files are saved at the step-specific checkpoint directory, while the
     Fabric-specific files are saved in a subdirectory. This is done to facilitate easier
     versioning of the HuggingFace model files (which are what gets uploaded to the Hub).
 
@@ -114,16 +114,16 @@ def save_checkpoint(
         └── {training_config.run_name}/
             └── {CHECKPOINT_DIR}/
                 ├── step_{step}/
-            │   ├── config.json              # HuggingFace model config
-            │   ├── pytorch_model.bin        # HuggingFace model weights
-            │   ├── vocab.json               # Tokenizer vocab
-            │   ├── merges.txt               # Tokenizer merges
-            │   ├── {FABRIC_CHECKPOINT_DIR}/ # Fabric-specific files
-            │      ├── config.yaml           # Full training config
-            │      ├── model.pt              # Fabric model state
-            │      ├── optimizer.pt          # Optimizer and LR scheduler states
-            │      └── training.pt           # Training progress and RNG states
-            └── latest -> step_{step}/
+                │   ├── config.json              # HuggingFace model config
+                │   ├── pytorch_model.bin        # HuggingFace model weights
+                │   ├── vocab.json               # Tokenizer vocab
+                │   ├── merges.txt               # Tokenizer merges
+                │   └── {FABRIC_CHECKPOINT_DIR}/ # Fabric-specific files
+                │      ├── config.yaml           # Full training config
+                │      ├── model.pt              # Fabric model state
+                │      ├── optimizer.pt          # Optimizer and LR scheduler states
+                │      └── training.pt           # Training progress and RNG states
+                └── latest -> step_{step}/
 
     Args:
         sub_configs: A dictionary containing the initialized configuration objects.
@@ -161,6 +161,8 @@ def save_checkpoint(
     #
     ########################################################
 
+    # NOTE: we convert the Pico model to a HuggingFace model before saving it. See `model.py`
+    # for more details.
     hf_model = model.convert_to_hf_model()
     hf_model.save_pretrained(curr_checkpoint_dir)
     tokenizer.save_pretrained(curr_checkpoint_dir)
@@ -240,11 +242,54 @@ def save_checkpoint(
         # Upload logs if requested
         if upload_logs:
             upload_folder(
-                folder_path=os.path.join(run_dir, "logs"),
-                path_in_repo="logs",
+                folder_path=os.path.join(run_dir, LOG_DIR),
+                path_in_repo=LOG_DIR,
                 repo_id=training_config.checkpointing.save_checkpoint_repo_id,
                 commit_message=f"Saving Logs -- Step {step}",
                 revision=training_config.run_name,
+                token=os.getenv("HF_TOKEN"),
+            )
+
+    fabric.barrier()
+
+
+def save_evaluation_results(evaluation_config, fabric, evaluation_results, step):
+    """Save evaluation results to disk and optionally to HuggingFace Hub.
+
+    The evaluation results are saved in the following directory structure:
+    {RUNS_DIR}/
+        └── {evaluation_config.run_name}/
+            └── {EVAL_RESULTS_DIR}/
+                └── step_{step}.json
+
+    Args:
+        evaluation_config: Configuration object containing evaluation settings
+        fabric: Lightning Fabric instance
+        evaluation_results: Dictionary containing evaluation metrics
+        step: Current training step
+    """
+
+    # Only save on rank 0 to avoid conflicts
+
+    run_dir = os.path.join(RUNS_DIR, evaluation_config.run_name)
+    eval_results_dir = os.path.join(run_dir, EVAL_RESULTS_DIR)
+
+    if fabric.global_rank == 0:
+        os.makedirs(eval_results_dir, exist_ok=True)
+
+        curr_eval_results_path = os.path.join(eval_results_dir, f"step_{step}.json")
+
+        # save out as json
+        with open(curr_eval_results_path, "w") as f:
+            json.dump(evaluation_results, f)
+
+        if evaluation_config.save_checkpoint_repo_id is not None:
+            upload_folder(
+                folder_path=eval_results_dir,
+                path_in_repo=EVAL_RESULTS_DIR,
+                repo_id=evaluation_config.save_checkpoint_repo_id,
+                commit_message=f"Saving Evaluation Results -- Step {step}",
+                revision=evaluation_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
 

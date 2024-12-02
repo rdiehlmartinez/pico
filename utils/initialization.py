@@ -31,7 +31,7 @@ from config import (
 
 from lightning.fabric.loggers import Logger as FabricLogger
 
-from . import RUNS_DIR, CHECKPOINT_DIR
+from . import RUNS_DIR, CHECKPOINT_DIR, LOG_DIR
 
 ########################################################
 #
@@ -360,7 +360,7 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
     """
 
     run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    logs_dir = os.path.join(run_dir, "logs")
+    logs_dir = os.path.join(run_dir, LOG_DIR)
     os.makedirs(logs_dir, exist_ok=True)
 
     # datetime stamp

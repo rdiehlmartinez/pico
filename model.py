@@ -1,6 +1,7 @@
 """
-Beep Boop - this is the Pico Model: a lightweight transformer-based language model. Pico uses a
-a simple LLAMA-style transformer architecture, written for clarity and educational purposes.
+The Pico Model: a lightweight transformer-based language model.
+
+Pico uses a simple LLAMA-style transformer architecture, written for clarity and educational purposes.
 
 Everything is written with a modular design for easy modification and experimentation.
 
@@ -513,6 +514,20 @@ class Pico(nn.Module):
 # PicoConfig and PicoForHF
 #
 ########################################################
+
+"""
+HuggingFace wrapper for the Pico model.
+
+Wait why do we need a wrapper? Aren't we just using the Pico class directly? Good question!
+
+Many evaluation frameworks require a model be setup as a HuggingFace model, so we provide a simple
+wrapper that does just that. When we save checkpoints of the Pico model, we save both the normal
+Pico model as well as the model wrapped in this HuggingFace class.
+
+This also lets you do cool things like: 
+
+`model = AutoModelForCausalLM.from_pretrained("path/to/checkpoint")`
+"""
 
 
 class PicoHFConfig(PretrainedConfig):
