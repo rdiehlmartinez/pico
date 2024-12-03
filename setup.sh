@@ -10,6 +10,9 @@ RED='\033[0;31m'
 NC='\033[0m' # No Color
 BOLD='\033[1m'
 
+# Initialize error tracking
+ERRORS_FOUND=0
+
 # Function for section headers
 print_section() {
     echo -e "\n${BOLD}${BLUE}=== $1 ===${NC}\n"
@@ -28,41 +31,60 @@ print_warning() {
 # Check if git-lfs is installed
 print_section "Git LFS Setup"
 if ! command -v git-lfs &> /dev/null; then
-    echo "git-lfs not found. Installing..."
+    print_warning "git-lfs is not installed. Some model checkpointing functionality may not work correctly."
     
     # Check the operating system
     if [[ "$OSTYPE" == "darwin"* ]]; then
         # macOS
-        if command -v brew &> /dev/null; then
-            brew install git-lfs
-        else
-            echo "Homebrew not found. Please install Homebrew first: https://brew.sh/"
-            exit 1
-        fi
+        echo -e "${YELLOW}    You can install it using Homebrew:${NC}"
+        echo "    brew install git-lfs"
     elif [[ "$OSTYPE" == "linux-gnu"* ]]; then
         # Linux
+        echo -e "${YELLOW}    You can install it using your package manager:${NC}"
         if command -v apt-get &> /dev/null; then
             # Ubuntu/Debian
-            curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash
-            sudo apt-get install git-lfs
+            echo "    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.deb.sh | sudo bash"
+            echo "    sudo apt-get install git-lfs"
         elif command -v yum &> /dev/null; then
             # CentOS/RHEL
-            curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.rpm.sh | sudo bash
-            sudo yum install git-lfs
+            echo "    curl -s https://packagecloud.io/install/repositories/github/git-lfs/script.rpm.sh | sudo bash"
+            echo "    sudo yum install git-lfs"
         else
-            echo "Could not detect package manager. Please install git-lfs manually."
-            exit 1
+            print_warning "Could not detect package manager. Please install git-lfs manually."
         fi
     else
-        echo "Unsupported operating system. Please install git-lfs manually."
-        exit 1
+        print_warning "Unsupported operating system. Please install git-lfs manually."
     fi
-    
-    # Initialize git-lfs
-    git-lfs install
-    print_success "git-lfs installed and initialized"
 else
-    print_success "git-lfs already installed"
+    git-lfs install 
+    print_success "git-lfs installed and initialized"
+fi
+
+# Check CUDA version
+print_section "CUDA Version Check"
+if command -v nvidia-smi &> /dev/null; then
+    CUDA_VERSION=$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader | head -n 1)
+    if [[ "$CUDA_VERSION" == *"failed"* ]]; then
+        ERRORS_FOUND=$((ERRORS_FOUND + 1))
+        print_warning "nvidia-smi failed to communicate with the NVIDIA driver."
+        echo -e "${YELLOW}    Ensure that the latest NVIDIA driver is installed and running.${NC}"
+    else
+        MAJOR_VERSION=${CUDA_VERSION%.*}
+        MINOR_VERSION=${CUDA_VERSION#*.}
+        
+        if [ "$MAJOR_VERSION" -lt 12 ] || ([ "$MAJOR_VERSION" -eq 12 ] && [ "$MINOR_VERSION" -lt 1 ]); then
+            ERRORS_FOUND=$((ERRORS_FOUND + 1))
+            print_warning "CUDA version ${MAJOR_VERSION}.${MINOR_VERSION} detected."
+            echo -e "${YELLOW}    Some multi-node communication GPU features may not work properly.${NC}"
+            echo -e "${YELLOW}    CUDA version 12.1 or newer is required.${NC}"
+        else
+            print_success "CUDA version ${MAJOR_VERSION}.${MINOR_VERSION} detected."
+        fi
+    fi
+else
+    ERRORS_FOUND=$((ERRORS_FOUND + 1))
+    print_warning "nvidia-smi not found. Unable to check CUDA version."
+    echo -e "${YELLOW}    Ensure that NVIDIA drivers and CUDA version at 12.1 or newer are installed for GPU support.${NC}"
 fi
 
 # Initialize and update git submodules
@@ -72,16 +94,16 @@ git submodule update --init --recursive
 print_success "Git submodules initialized"
 
 # ---- ENVIRONMENT VARIABLES ---- #
-# Source .env file if it exists
 print_section "Environment Variables"
 if [ -f .env ]; then
     print_success "Loading environment variables from .env..."
     source .env
 else
-    print_warning "No .env file found. You might need to create one with HF_TOKEN and WANDB_API_KEY"
-    echo -e "${YELLOW}Example .env contents:${NC}"
-    echo "export HF_TOKEN=your_huggingface_token"
-    echo "export WANDB_API_KEY=your_wandb_key"
+    print_warning "No .env file found."
+    echo -e "${YELLOW}    You might need to create one with HF_TOKEN and WANDB_API_KEY${NC}"
+    echo -e "${YELLOW}    Example .env contents:${NC}"
+    echo "    export HF_TOKEN=your_huggingface_token"
+    echo "    export WANDB_API_KEY=your_wandb_key"
 fi
 
 # ---- POETRY SETUP ---- #
@@ -129,7 +151,6 @@ poetry run pre-commit run --all-files
 print_success "Pre-commit initial run complete"
 
 # ---- EVALUATION SETUP ---- #
-# Clone Paloma dataset if credentials are provided and directory doesn't exist
 print_section "Evaluation Setup"
 if [ ! -d "lib/paloma" ]; then
     if [ ! -z "$HF_TOKEN" ]; then
@@ -137,33 +158,40 @@ if [ ! -d "lib/paloma" ]; then
         git clone https://oauth2:${HF_TOKEN}@huggingface.co/datasets/allenai/paloma lib/paloma
         print_success "Paloma dataset cloned successfully"
     else
-        print_warning "Skipping Paloma dataset clone. To clone, provide valid HuggingFace credentials"
-        echo -e "${YELLOW}Note: You need to request access to the Paloma dataset on HuggingFace:${NC}"
-        echo -e "${BLUE}https://huggingface.co/datasets/allenai/paloma${NC}"
-        echo -e "${YELLOW}Visit the dataset page and click 'Access Request' to request permission.${NC}"
+        print_warning "Skipping Paloma dataset clone. HuggingFace credentials not found."
+        echo -e "${YELLOW}    You need to request access to the Paloma dataset on HuggingFace:${NC}"
+        echo -e "    ${BLUE}https://huggingface.co/datasets/allenai/paloma${NC}"
+        echo -e "${YELLOW}    Visit the dataset page and click 'Access Request' to request permission.${NC}"
     fi
 else
     print_success "Paloma dataset already exists, skipping clone"
 fi
 
 # Create environment for running evaluation inside of lib/olmo_eval
-# skip if already exists
 if [ ! -d "lib/olmo-eval/env" ]; then
     print_section "OLMo Eval Setup"
-    poetry shell
-    cd lib/olmo-eval
-    echo "Creating virtual environment..."
-    virtualenv env
-    source env/bin/activate
-    pip install -e .
-    deactivate
-    cd ../../
-    print_success "OLMo eval environment setup complete"
-    exit # out of poetry shell
+    poetry run bash -c '
+        cd lib/olmo-eval
+        echo "Creating virtual environment..."
+        virtualenv env
+        source env/bin/activate
+        pip install wandb==0.12.1
+        pip install -e .
+        deactivate
+        cd ../../
+        echo "OLMo eval environment setup complete"
+    '
 else
     print_success "OLMo eval environment already exists, skipping setup"
 fi
 
-print_section "Setup Complete! 🎉"
-echo "You can now activate the poetry environment with: poetry shell"
+# Final status message
+print_section "Setup Status"
+if [ $ERRORS_FOUND -eq 0 ]; then
+    print_success "Setup Complete! 🎉"
+else
+    print_warning "Setup completed with warnings! Please check the messages above."
+    echo -e "${YELLOW}    Some features might not work as expected.${NC}"
+fi
+poetry shell
 
