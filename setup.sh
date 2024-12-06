@@ -63,8 +63,9 @@ fi
 # Check CUDA version
 print_section "CUDA Version Check"
 if command -v nvidia-smi &> /dev/null; then
-    CUDA_VERSION=$(nvidia-smi --query-gpu=cuda_version --format=csv,noheader | head -n 1)
-    if [[ "$CUDA_VERSION" == *"failed"* ]]; then
+    CUDA_VERSION=$(nvidia-smi | sed -n 's/.*CUDA Version: \([0-9.]*\).*/\1/p')
+    
+    if [[ -z "$CUDA_VERSION" ]]; then
         ERRORS_FOUND=$((ERRORS_FOUND + 1))
         print_warning "nvidia-smi failed to communicate with the NVIDIA driver."
         echo -e "${YELLOW}    Ensure that the latest NVIDIA driver is installed and running.${NC}"
@@ -78,7 +79,7 @@ if command -v nvidia-smi &> /dev/null; then
             echo -e "${YELLOW}    Some multi-node communication GPU features may not work properly.${NC}"
             echo -e "${YELLOW}    CUDA version 12.1 or newer is required.${NC}"
         else
-            print_success "CUDA version ${MAJOR_VERSION}.${MINOR_VERSION} detected."
+            print_success "CUDA version ${MAJOR_VERSION}.${MINOR_VERSION} detected"
         fi
     fi
 else
@@ -151,38 +152,56 @@ poetry run pre-commit run --all-files
 print_success "Pre-commit initial run complete"
 
 # ---- EVALUATION SETUP ---- #
-print_section "Evaluation Setup"
-if [ ! -d "lib/paloma" ]; then
-    if [ ! -z "$HF_TOKEN" ]; then
-        echo "Cloning Paloma evaluation dataset..."
-        git clone https://oauth2:${HF_TOKEN}@huggingface.co/datasets/allenai/paloma lib/paloma
-        print_success "Paloma dataset cloned successfully"
-    else
-        print_warning "Skipping Paloma dataset clone. HuggingFace credentials not found."
-        echo -e "${YELLOW}    You need to request access to the Paloma dataset on HuggingFace:${NC}"
-        echo -e "    ${BLUE}https://huggingface.co/datasets/allenai/paloma${NC}"
-        echo -e "${YELLOW}    Visit the dataset page and click 'Access Request' to request permission.${NC}"
-    fi
-else
-    print_success "Paloma dataset already exists, skipping clone"
-fi
+print_section "Evaluation (Paloma) Setup"
 
-# Create environment for running evaluation inside of lib/olmo_eval
-if [ ! -d "lib/olmo-eval/env" ]; then
-    print_section "OLMo Eval Setup"
-    poetry run bash -c '
-        cd lib/olmo-eval
-        echo "Creating virtual environment..."
-        virtualenv env
-        source env/bin/activate
-        pip install wandb==0.12.1
-        pip install -e .
-        deactivate
-        cd ../../
-        echo "OLMo eval environment setup complete"
-    '
+# Add flag check for skipping evaluation
+if [ "$1" = "--skip-eval" ]; then
+    print_warning "Skipping evaluation setup as requested"
 else
-    print_success "OLMo eval environment already exists, skipping setup"
+    if [ ! -d "lib/paloma" ]; then
+        if [ ! -z "$HF_TOKEN" ]; then
+            echo "Setting up HuggingFace authentication..."
+            echo $HF_TOKEN | poetry run huggingface-cli login --token $HF_TOKEN
+            
+            echo "Cloning Paloma evaluation dataset..."
+            git clone https://oauth2:${HF_TOKEN}@huggingface.co/datasets/allenai/paloma lib/paloma
+            
+            if [ $? -eq 0 ]; then
+                print_success "Paloma dataset cloned successfully"
+            else
+                ERRORS_FOUND=$((ERRORS_FOUND + 1))
+                print_warning "Failed to clone Paloma dataset"
+                echo -e "${YELLOW}    Please verify your HuggingFace token has correct permissions${NC}"
+                echo -e "${YELLOW}    Make sure you have been granted access to allenai/paloma dataset${NC}"
+                rm -rf lib/paloma
+            fi
+        else
+            print_warning "Skipping Paloma dataset clone. HuggingFace credentials not found."
+            echo -e "${YELLOW}    You need to request access to the Paloma dataset on HuggingFace:${NC}"
+            echo -e "    ${BLUE}https://huggingface.co/datasets/allenai/paloma${NC}"
+            echo -e "${YELLOW}    Visit the dataset page and click 'Access Request' to request permission.${NC}"
+            rm -rf lib/paloma
+        fi
+    else
+        print_success "Paloma dataset already exists, skipping clone"
+    fi
+
+    # Create environment for running evaluation inside of lib/olmo_eval
+    if [ ! -d "lib/olmo-eval/env" ]; then
+        print_section "OLMo Eval Setup"
+        poetry run bash -c '
+            cd lib/olmo-eval
+            echo "Creating virtual environment..."
+            virtualenv env
+            source env/bin/activate
+            pip install --python-version 3.10 -e . 
+            deactivate
+            cd ../../
+            echo "OLMo eval environment setup complete"
+        '
+    else
+        print_success "OLMo eval environment already exists, skipping setup"
+    fi
 fi
 
 # Final status message
