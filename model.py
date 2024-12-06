@@ -44,6 +44,7 @@ except ImportError:
 
 
 from transformers import PretrainedConfig, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutput
 
 ########################################################
 #
@@ -189,6 +190,8 @@ class RoPE(nn.Module):
         # otherwise, we need to move it to the correct device
         if self.fabric is not None:
             freqs_cis = self.fabric.to_device(freqs_cis)
+        else:
+            freqs_cis = freqs_cis.to(queries.device)
 
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
@@ -577,8 +580,17 @@ class PicoHF(PreTrainedModel):
         past_key_values: Optional[Tuple[Tuple[torch.Tensor]]] = None,
         use_cache: bool = False,
         **kwargs,
-    ) -> Tuple[torch.Tensor, Optional[Tuple[Tuple[torch.Tensor]]]]:
-        return self.pico(input_ids, past_key_values, use_cache)
+    ) -> Union[CausalLMOutput, CausalLMOutputWithPast]:
+        logits, past_key_values = self.pico(input_ids, past_key_values, use_cache)
+        if use_cache:
+            return CausalLMOutputWithPast(
+                logits=logits,
+                past_key_values=past_key_values,
+            )
+        else:
+            return CausalLMOutput(
+                logits=logits,
+            )
 
 
 # Register for auto classes

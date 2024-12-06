@@ -149,7 +149,7 @@ If you use Pico in your research, please cite:
 
 ```bibtex
 @software{pico2024,
-    author = {Martinez, Richard Diehl},
+    author = {Diehl Martinez, Richard},
     title = {Pico: Framework for Training Tiny Language Models},
     year = {2024},
 }

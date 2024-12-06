@@ -9,17 +9,15 @@ readme = "README.md"
 
 [tool.poetry.dependencies]
 python = "^3.10"
-ray = "^2.35.0"
 lightning = "^2.4.0"
-omegaconf = "^2.3.0"
 click = "^8.1.7"
 wandb = "^0.18.1"
 huggingface-hub = {extras = ["cli"], version = "^0.25.1"}
-jsonnet = "^0.20.0"
-virtualenv = "^20.27.1"
 datasets = "^3.0.1"
 transformers = "^4.45.2"
 pre-commit = "^4.0.1"
+torch = "^2.5.1"
+evaluate = "^0.4.3"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"

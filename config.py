@@ -160,9 +160,9 @@ class TrainingConfig:
 
 
 @dataclass
-class _PalomaEvaluationConfig:
-    limit_eval_examples: Optional[int] = 1
+class PalomaEvaluationConfig:
     max_length: int = MAX_SEQ_LEN
+    batch_size: int = 16
 
 
 @dataclass
@@ -182,4 +182,4 @@ class EvaluationConfig:
 
     # NOTE: Add other evaluation configs here
     # Each evaluation metric should have its own config
-    paloma: _PalomaEvaluationConfig = field(default_factory=_PalomaEvaluationConfig)
+    paloma: PalomaEvaluationConfig = field(default_factory=PalomaEvaluationConfig)
