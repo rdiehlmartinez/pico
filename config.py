@@ -1,5 +1,5 @@
 """
-Welcome to the Pico Config File!
+The Pico Config File!
 
 This is where you can specify the hyperparameters for the Pico model, the dataset, the training
 process, evaluation yada yada.
@@ -15,7 +15,7 @@ Some things to NOTE:
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
+from typing import Optional, List
 
 VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 2048
@@ -24,34 +24,13 @@ GRADIENT_ACCUMULATION_STEPS = (
     128  # NOTE: Play with this to make the batch size fit in memory.
 )
 
-# N.B. The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
+# NOTE! The effective batch size is BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS.
 
 ########################################################
 #
 # Model Config
 #
 ########################################################
-
-
-@dataclass
-class _RoPEConfig:
-    theta: float = 10000.0
-
-
-@dataclass
-class _RMSNormConfig:
-    eps: float = 1e-6
-
-
-@dataclass
-class _ActivationConfig:
-    act_hidden_dim: int = 768
-
-
-@dataclass
-class _AttentionConfig:
-    n_heads: int = 12
-    n_kv_heads: Optional[int] = 4
 
 
 @dataclass
@@ -63,10 +42,14 @@ class ModelConfig:
     batch_size: int = BATCH_SIZE
     max_seq_len: int = MAX_SEQ_LEN
 
-    attention: _AttentionConfig = field(default_factory=_AttentionConfig)
-    activation: _ActivationConfig = field(default_factory=_ActivationConfig)
-    norm: _RMSNormConfig = field(default_factory=_RMSNormConfig)
-    position_emb: _RoPEConfig = field(default_factory=_RoPEConfig)
+    attention_n_heads: int = 12
+    attention_n_kv_heads: Optional[int] = 4
+
+    activation_hidden_dim: int = 768
+
+    norm_eps: float = 1e-6
+
+    position_emb_theta: float = 10000.0
 
 
 ########################################################
@@ -177,6 +160,26 @@ class TrainingConfig:
 
 
 @dataclass
+class PalomaEvaluationConfig:
+    max_length: int = MAX_SEQ_LEN
+    batch_size: int = 16
+
+
+@dataclass
 class EvaluationConfig:
-    eval_every_n_steps: int = 100
-    eval_batch_size: int = 1024
+    # Name of the run to evaluate
+    run_name: Optional[str] = None
+
+    # Path to load a checkpoint from a local path
+    checkpoint_path: Optional[str] = None
+
+    # HuggingFace Hub Configs - set to None to not push to HuggingFace Hub
+    # Should be in the format of <(username or )>/<repo_name>, e.g. pico-lm/pico-7b
+    save_checkpoint_repo_id: Optional[str] = "pico-lm/demo"
+
+    # Evaluation metrics to compute: by default, we compute the perplexity of the model
+    evaluation_metrics: List[str] = field(default_factory=lambda: ["paloma"])
+
+    # NOTE: Add other evaluation configs here
+    # Each evaluation metric should have its own config
+    paloma: PalomaEvaluationConfig = field(default_factory=PalomaEvaluationConfig)
