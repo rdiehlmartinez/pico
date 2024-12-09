@@ -22,16 +22,10 @@ from datasets import load_dataset, Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
-from config import (
-    DataConfig,
-    ModelConfig,
-    TrainingConfig,
-    EvaluationConfig,
-)
+
+from src.config import TrainingConfig, DataConfig, ModelConfig, EvaluationConfig
 
 from lightning.fabric.loggers import Logger as FabricLogger
-
-from . import RUNS_DIR, CHECKPOINT_DIR, LOG_DIR
 
 ########################################################
 #
@@ -130,7 +124,7 @@ def initialize_run_dir(
 
     evaluation_config.run_name = run_name
 
-    run_dir = os.path.join(RUNS_DIR, run_name)
+    run_dir = os.path.join(training_config.runs_dir, run_name)
 
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
@@ -345,9 +339,9 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
     Creates the necessary directory structure if it doesn't exist.
 
     Directory Structure:
-        RUNS_DIR/
-        └── {run_name}/
-            └── logs/
+        {training_config.runs_dir}/
+        └── {training_config.run_name}/
+            └── {training_config.logs_dir}/
                 └── log_YYYYMMDD_HHMMSS.txt
 
     Args:
@@ -359,8 +353,8 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
 
     """
 
-    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    logs_dir = os.path.join(run_dir, LOG_DIR)
+    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
+    logs_dir = os.path.join(run_dir, training_config.logs_dir)
     os.makedirs(logs_dir, exist_ok=True)
 
     # datetime stamp
@@ -476,9 +470,9 @@ def initialize_checkpointing(training_config: TrainingConfig):
     and branches if they don't exist.
 
     Directory Structure:
-        RUNS_DIR/
-        └── {run_name}/
-            └── CHECKPOINT_DIR/
+        training_config.runs_dir/
+        └── {training_config.run_name}/
+            └── training_config.checkpoints_dir/
                 └── step_{step_number}/
                     └── ...
 
@@ -504,8 +498,8 @@ def initialize_checkpointing(training_config: TrainingConfig):
     from huggingface_hub.errors import HfHubHTTPError
     from huggingface_hub.repository import Repository
 
-    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
+    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
+    checkpoint_dir = os.path.join(run_dir, training_config.checkpoints_dir)
 
     _repo_sleep_time = 1
     _repo_created = False

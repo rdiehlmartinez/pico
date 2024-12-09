@@ -5,7 +5,10 @@ description = "A framework for training small language models and analyzing thei
 authors = ["Richard Diehl Martinez <richarddiehl@gmail.com>"]
 license = "Apache 2.0"
 readme = "README.md"
+packages = [{include = "src"}]
 
+[tool.poetry.scripts]
+train = "scripts.train:main"
 
 [tool.poetry.dependencies]
 python = "^3.10"

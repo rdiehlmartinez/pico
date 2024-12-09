@@ -149,5 +149,7 @@ else
     print_warning "Setup completed with warnings! Please check the messages above."
     echo -e "${YELLOW}    Some features might not work as expected.${NC}"
 fi
+
+# Activate the virtual environment
 poetry shell
 

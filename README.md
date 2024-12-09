@@ -75,20 +75,20 @@ source setup.sh
 ```
 ### Exploring the Codebase
 
-The core implementation is organized into these key files:
+The core implementation is organized into these key files and packages:
 
-- **`model.py`**: The heart of Pico
+- **`src/model/pico.py`**: The heart of Pico
   - LLAMA-style transformer implementation
   - Attention mechanism with KV-cache
   - RoPE positional embeddings
   - Documentation references for each component
 
-- **`train.py`**: Training pipeline
+- **`src/training/trainer.py`**: Training pipeline
   - Distributed training setup
   - Checkpoint management
   - Logging configuration
 
-- **`config.py`**: Model configuration
+- **`src/config`**: Model configuration
   - Hyperparameter definitions
   - Model architecture settings
   - Training parameters
@@ -106,7 +106,7 @@ model = AutoModelForCausalLM.from_pretrained("pico-lm/[...]")
 2. **Training Your Own Suite**
 ```bash
 # Edit config/train.yaml to customize your training
-python train.py --config configs/train.yaml
+poetry run train --config_path configs/train.yaml
 ```
 
 

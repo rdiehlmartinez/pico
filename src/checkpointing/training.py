@@ -1,20 +1,35 @@
 """
-Utilities for checkpointing.
+Utilities for checkpointing training-related states (i.e. model, optimizer, lr_scheduler, etc.)
 
-Good, clean checkpointing is probably one of the most important parts of training pipeline,
-especially for researching learning dynamics
+We save both a HuggingFace model and a Fabric-specific checkpoint. The HuggingFace model is
+saved at the step-specific checkpoint directory, while the Fabric-specific checkpoint is saved
+in a subdirectory. This is done to facilitate easier versioning of the HuggingFace model files
+(which are what gets uploaded to the Hub).
 """
 
 import os
 import yaml
 from huggingface_hub import upload_folder
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
-import json
-from . import RUNS_DIR, CHECKPOINT_DIR, FABRIC_CHECKPOINT_DIR, EVAL_RESULTS_DIR, LOG_DIR
+
+# typing imports
+from torch.utils.data import DataLoader
+from torch.optim import Optimizer
+from torch.optim.lr_scheduler import LRScheduler
+from torch import nn
+from transformers import PreTrainedTokenizerBase
+from lightning.fabric import Fabric
+from src.config import TrainingConfig
+from typing import Optional, Dict, Any
 
 
 def load_checkpoint(
-    training_config, fabric, model, optimizer, lr_scheduler, train_dataloader=None
+    training_config: TrainingConfig,
+    fabric: Fabric,
+    model: nn.Module,
+    optimizer: Optimizer,
+    lr_scheduler: LRScheduler,
+    train_dataloader: Optional[DataLoader] = None,
 ):
     """
     Load model checkpoint and associated states from disk or latest checkpoint.
@@ -44,7 +59,10 @@ def load_checkpoint(
         checkpoint_path = training_config.checkpointing.load_checkpoint_path
     elif training_config.checkpointing.load_latest_checkpoint:
         checkpoint_path = os.path.join(
-            RUNS_DIR, training_config.run_name, CHECKPOINT_DIR, "latest"
+            training_config.runs_dir,
+            training_config.run_name,
+            training_config.checkpoints_dir,
+            "latest",
         )
     else:
         raise ValueError("No checkpoint path specified")
@@ -84,14 +102,14 @@ def load_checkpoint(
 
 
 def save_checkpoint(
-    sub_configs,
-    fabric,
-    model,
-    optimizer,
-    lr_scheduler,
-    tokenizer,
-    step,
-    upload_logs=True,
+    sub_configs: Dict[str, Any],
+    fabric: Fabric,
+    model: nn.Module,
+    optimizer: Optimizer,
+    lr_scheduler: LRScheduler,
+    tokenizer: PreTrainedTokenizerBase,
+    step: int,
+    upload_logs: bool = True,
 ):
     """
     Save model checkpoint and associated states to disk and optionally to HuggingFace Hub.
@@ -110,15 +128,15 @@ def save_checkpoint(
 
     Creates a versioned checkpoint directory with the following structure:
 
-    {RUNS_DIR}/
+    {training_config.runs_dir}/
         └── {training_config.run_name}/
-            └── {CHECKPOINT_DIR}/
+            └── {training_config.checkpoints_dir}/
                 ├── step_{step}/
                 │   ├── config.json              # HuggingFace model config
                 │   ├── pytorch_model.bin        # HuggingFace model weights
                 │   ├── vocab.json               # Tokenizer vocab
                 │   ├── merges.txt               # Tokenizer merges
-                │   └── {FABRIC_CHECKPOINT_DIR}/ # Fabric-specific files
+                │   └── {training_config.fabric_checkpoint_dir}/ # Fabric-specific files
                 │      ├── config.yaml           # Full training config
                 │      ├── model.pt              # Fabric model state
                 │      ├── optimizer.pt          # Optimizer and LR scheduler states
@@ -137,7 +155,7 @@ def save_checkpoint(
 
     Notes:
         - Only rank 0 process saves checkpoints in distributed training
-        - Checkpoints are saved under: {RUNS_DIR}/{training_config.run_name}/{CHECKPOINT_DIR}/step_{step}
+        - Checkpoints are saved under: {training_config.runs_dir}/{training_config.run_name}/{training_config.checkpoints_dir}/step_{step}
         - Existing checkpoints are not overwritten
         - HuggingFace Hub uploads are incremental (only new files are uploaded)
     """
@@ -147,8 +165,14 @@ def save_checkpoint(
 
     training_config = sub_configs["training"]
 
-    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    root_checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
+    # Get the directories from the training config
+    runs_dir = training_config.runs_dir
+    checkpoints_dir = training_config.checkpoints_dir
+    fabric_checkpoint_dir = training_config.fabric_checkpoint_dir
+    logs_dir = training_config.logs_dir
+
+    run_dir = os.path.join(runs_dir, training_config.run_name)
+    root_checkpoint_dir = os.path.join(run_dir, checkpoints_dir)
     curr_checkpoint_dir = os.path.join(root_checkpoint_dir, f"step_{step}")
 
     # Create directories
@@ -174,17 +198,19 @@ def save_checkpoint(
     ########################################################
 
     # Create fabric-specific subdirectory
-    fabric_checkpoint_dir = os.path.join(curr_checkpoint_dir, FABRIC_CHECKPOINT_DIR)
-    os.makedirs(fabric_checkpoint_dir, exist_ok=True)
+    curr_fabric_checkpoint_dir = os.path.join(
+        curr_checkpoint_dir, fabric_checkpoint_dir
+    )
+    os.makedirs(curr_fabric_checkpoint_dir, exist_ok=True)
 
     # Save model state
-    model_state_path = os.path.join(fabric_checkpoint_dir, "model.pt")
+    model_state_path = os.path.join(curr_fabric_checkpoint_dir, "model.pt")
     if not os.path.exists(model_state_path):
         model_state = {"model": model.state_dict()}
         fabric.save(model_state_path, model_state)
 
     # Save optimizer state
-    optimizer_state_path = os.path.join(fabric_checkpoint_dir, "optimizer.pt")
+    optimizer_state_path = os.path.join(curr_fabric_checkpoint_dir, "optimizer.pt")
     if not os.path.exists(optimizer_state_path):
         optimizer_state = {
             "optimizer": optimizer.state_dict(),
@@ -193,7 +219,7 @@ def save_checkpoint(
         fabric.save(optimizer_state_path, optimizer_state)
 
     # Save training state
-    training_state_path = os.path.join(fabric_checkpoint_dir, "training.pt")
+    training_state_path = os.path.join(curr_fabric_checkpoint_dir, "training.pt")
     if not os.path.exists(training_state_path):
         training_state = {
             "step": step,
@@ -202,7 +228,7 @@ def save_checkpoint(
         fabric.save(training_state_path, training_state)
 
     # Save config in fabric directory
-    config_path = os.path.join(fabric_checkpoint_dir, "config.yaml")
+    config_path = os.path.join(curr_fabric_checkpoint_dir, "config.yaml")
     if not os.path.exists(config_path):
         with open(config_path, "w") as f:
             yaml.dump(sub_configs, f)
@@ -231,8 +257,8 @@ def save_checkpoint(
 
         # Upload the fabric checkpoint directory
         upload_folder(
-            folder_path=fabric_checkpoint_dir,
-            path_in_repo=FABRIC_CHECKPOINT_DIR,
+            folder_path=curr_fabric_checkpoint_dir,
+            path_in_repo=fabric_checkpoint_dir,
             repo_id=training_config.checkpointing.save_checkpoint_repo_id,
             commit_message=f"Saving Fabric Checkpoint -- Step {step}",
             revision=training_config.run_name,
@@ -242,54 +268,11 @@ def save_checkpoint(
         # Upload logs if requested
         if upload_logs:
             upload_folder(
-                folder_path=os.path.join(run_dir, LOG_DIR),
-                path_in_repo=LOG_DIR,
+                folder_path=os.path.join(run_dir, logs_dir),
+                path_in_repo=logs_dir,
                 repo_id=training_config.checkpointing.save_checkpoint_repo_id,
                 commit_message=f"Saving Logs -- Step {step}",
                 revision=training_config.run_name,
-                token=os.getenv("HF_TOKEN"),
-            )
-
-    fabric.barrier()
-
-
-def save_evaluation_results(evaluation_config, fabric, evaluation_results, step):
-    """Save evaluation results to disk and optionally to HuggingFace Hub.
-
-    The evaluation results are saved in the following directory structure:
-    {RUNS_DIR}/
-        └── {evaluation_config.run_name}/
-            └── {EVAL_RESULTS_DIR}/
-                └── step_{step}.json
-
-    Args:
-        evaluation_config: Configuration object containing evaluation settings
-        fabric: Lightning Fabric instance
-        evaluation_results: Dictionary containing evaluation metrics
-        step: Current training step
-    """
-
-    # Only save on rank 0 to avoid conflicts
-
-    run_dir = os.path.join(RUNS_DIR, evaluation_config.run_name)
-    eval_results_dir = os.path.join(run_dir, EVAL_RESULTS_DIR)
-
-    if fabric.global_rank == 0:
-        os.makedirs(eval_results_dir, exist_ok=True)
-
-        curr_eval_results_path = os.path.join(eval_results_dir, f"step_{step}.json")
-
-        # save out as json
-        with open(curr_eval_results_path, "w") as f:
-            json.dump(evaluation_results, f)
-
-        if evaluation_config.save_checkpoint_repo_id is not None:
-            upload_folder(
-                folder_path=eval_results_dir,
-                path_in_repo=EVAL_RESULTS_DIR,
-                repo_id=evaluation_config.save_checkpoint_repo_id,
-                commit_message=f"Saving Evaluation Results -- Step {step}",
-                revision=evaluation_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
 

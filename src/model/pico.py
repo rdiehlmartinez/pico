@@ -1,5 +1,5 @@
 """
-The Pico Model: a lightweight transformer-based language model.
+The Pico Model: A Lightweight Transformer Language Model
 
 Pico uses a simple LLAMA-style transformer architecture, written for clarity and educational purposes.
 
@@ -32,19 +32,20 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from dataclasses import asdict
+
+from transformers import PretrainedConfig, PreTrainedModel
+from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutput
+
+# typing imports
 from typing import Union, Tuple, Optional, TYPE_CHECKING, Dict, Any
 
 try:
     if TYPE_CHECKING:
         # We need to do this to avoid importing these when creating the HF-compatible models
-        from config import ModelConfig
+        from src.config import ModelConfig
         import lightning as L
 except ImportError:
     pass
-
-
-from transformers import PretrainedConfig, PreTrainedModel
-from transformers.modeling_outputs import CausalLMOutputWithPast, CausalLMOutput
 
 ########################################################
 #
