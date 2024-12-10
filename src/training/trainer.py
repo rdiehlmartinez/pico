@@ -41,6 +41,7 @@ from src.checkpointing import (
     load_checkpoint,
     save_checkpoint,
     save_evaluation_results,
+    # compute_learning_dynamics_metrics,
 )
 
 from src.evaluation import run_evaluation
@@ -296,6 +297,21 @@ class Trainer:
 
             ########################################################
             #
+            # Learning Dynamics Checkpointing
+            #
+            ########################################################
+
+            if self.training_config.checkpointing.learning_dynamics.enabled:
+                # compute_learning_dynamics_metrics(
+                #     self.training_config.checkpointing.learning_dynamics,
+                #     self.fabric,
+                #     self.model,
+                #     batch,
+                # )
+                pass
+
+            ########################################################
+            #
             # Optimization step
             #
             ########################################################
@@ -313,7 +329,7 @@ class Trainer:
 
             ########################################################
             #
-            # Checkpointing and evaluation
+            # Training Checkpointing and evaluation
             #
             ########################################################
 
@@ -333,7 +349,9 @@ class Trainer:
                 )
 
                 if self.evaluation_config:
-                    evaluation_results = run_evaluation(self.evaluation_config)
+                    evaluation_results = run_evaluation(
+                        self.evaluation_config, self.fabric
+                    )
                     if evaluation_results is not None:
                         self._log_evaluation_results(evaluation_results, gradient_step)
                         save_evaluation_results(

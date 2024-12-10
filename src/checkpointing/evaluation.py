@@ -36,6 +36,9 @@ def save_evaluation_results(
     """
 
     # Only save on rank 0 to avoid conflicts
+    if fabric.global_rank != 0:
+        fabric.barrier()
+        return
 
     run_dir = os.path.join(evaluation_config.runs_dir, evaluation_config.run_name)
     eval_results_dir = os.path.join(run_dir, evaluation_config.eval_results_dir)

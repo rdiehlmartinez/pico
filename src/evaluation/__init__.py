@@ -15,12 +15,14 @@ libraries/frameworks.
 """
 
 import os
-from src.config import EvaluationConfig
-
 from .tasks.paloma import run_paloma_evaluation
 
+# typing imports
+from src.config import EvaluationConfig
+from lightning.fabric import Fabric
 
-def run_evaluation(evaluation_config: EvaluationConfig) -> None:
+
+def run_evaluation(evaluation_config: EvaluationConfig, fabric: Fabric) -> None:
     """Run model evaluation using specified metrics in `evaluation_config`.
 
     This function orchestrates the complete evaluation pipeline by:
@@ -39,6 +41,7 @@ def run_evaluation(evaluation_config: EvaluationConfig) -> None:
             - paloma (PalomaConfig): Configuration for Paloma evaluation
                 - max_length (int): Maximum sequence length
                 - limit_eval_examples (Optional[int]): Number of examples to evaluate
+        fabric (Fabric): Lightning Fabric instance
 
     Returns:
         Dict[str, float]: Dictionary mapping metric names to their values
@@ -62,6 +65,10 @@ def run_evaluation(evaluation_config: EvaluationConfig) -> None:
         proper setup and teardown of evaluation environment.
     """
 
+    if fabric.global_rank != 0:
+        fabric.barrier()
+        return
+
     if evaluation_config.checkpoint_path is not None:
         model_path = evaluation_config.checkpoint_path
     else:
@@ -79,5 +86,7 @@ def run_evaluation(evaluation_config: EvaluationConfig) -> None:
             raise ValueError(f"Metric {metric} not supported")
 
         evaluation_results[metric] = paloma_result
+
+    fabric.barrier()
 
     return evaluation_results

@@ -49,7 +49,7 @@ class _LearningDynamicsConfig:
     activation_data: str = "pico-lm/pico-7b-activations"
 
     # Specify what layers to compute learning dynamics for
-    activation_layers: List[str] = field(default_factory=lambda: [])
+    target_layers: List[str] = field(default_factory=lambda: [])
 
 
 @dataclass
