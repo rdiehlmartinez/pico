@@ -22,6 +22,7 @@ from datasets import load_dataset, Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
+import warnings
 
 from src.config import (
     TrainingConfig,
@@ -33,6 +34,16 @@ from src.config import (
 )
 
 from lightning.fabric.loggers import Logger as FabricLogger
+
+
+warnings.filterwarnings(
+    "ignore",
+    message=".*This integration is tested and supported for lightning Fabric.*",
+)
+warnings.filterwarnings(
+    "ignore",
+    message=".*Please report any issues to.*",
+)
 
 ########################################################
 #

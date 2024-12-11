@@ -214,12 +214,14 @@ class Trainer:
                     )
 
         if self.train_start_step < self.configs["training"].max_steps:
-            self.log(f"Training from step {self.train_start_step}")
+            self.log(f"✨ Starting training from step {self.train_start_step}")
             final_step = self._training_loop()
+        else:
+            final_step = self.train_start_step
 
         # Handle checkpointing and final evaluation
         if final_step % self.configs["checkpointing"].save_every_n_steps != 0:
-            self.log(f"Saving final checkpoint at step {final_step}")
+            self.log(f"Step {final_step} -- 💾 Saving Final Checkpoint")
             save_checkpoint(
                 self.configs,
                 self.fabric,
@@ -230,20 +232,27 @@ class Trainer:
                 final_step,
             )
 
-        # Final evaluation
-        if self.should_evaluate:
-            self.log("Starting Final Evaluation!")
-            evaluation_results = run_evaluation(
-                self.configs["evaluation"],
-                self.configs["checkpointing"],
-                self.fabric,
-            )
-            self._log_evaluation_results(evaluation_results, final_step)
-            save_evaluation_results(
-                self.configs["checkpointing"],
-                self.fabric,
-                evaluation_results,
-                final_step,
+            # Final evaluation
+            if self.should_evaluate:
+                evaluation_results = run_evaluation(
+                    self.configs["evaluation"],
+                    self.configs["checkpointing"],
+                    self.fabric,
+                )
+                self._log_evaluation_results(evaluation_results, final_step)
+                save_evaluation_results(
+                    self.configs["checkpointing"],
+                    self.fabric,
+                    evaluation_results,
+                    final_step,
+                )
+
+        self.log(f"🎉 Training complete! Final step: {final_step}")
+
+        if final_step < self.configs["training"].max_steps:
+            self.log(
+                f"\t Note: Training stopped before max steps ({self.configs['training'].max_steps})",
+                level=logging.WARNING,
             )
 
     def _training_loop(self) -> int:
@@ -373,7 +382,7 @@ class Trainer:
             ########################################################
 
             if gradient_step % self.configs["checkpointing"].save_every_n_steps == 0:
-                self.log(f"Saving checkpoint at step {gradient_step}")
+                self.log(f"Step {gradient_step} -- 💾 Saving Checkpoint")
                 save_checkpoint(
                     self.configs,
                     self.fabric,
@@ -413,9 +422,8 @@ class Trainer:
         gradient_step: int,
     ):
         """
-        Gathers together the training metrics computed accross all processes in distributed training
-        (NOTE: also works for single process training), and logs them to the experiment tracking system
-        and console.
+        Gathers together the training metrics computed across all processes in distributed training
+        and logs them in a tree-style format.
         """
         gathered_interval_loss = self.fabric.all_reduce(
             interval_loss, reduce_op="sum"
@@ -445,17 +453,20 @@ class Trainer:
             step=gradient_step,
         )
 
-        self.log(
-            f"Step {gradient_step} Loss: {avg_loss}, Inf/NaN count: {gathered_interval_inf_or_nan_count}"
-        )
+        # Log to console in tree format
+        self.log(f"Step {gradient_step} -- 🔄 Training Metrics")
+        self.log(f"├── Loss: {avg_loss:.4f}")
+        self.log(f"├── Learning Rate: {self.lr_scheduler.get_last_lr()[0]:.2e}")
+        self.log(f"└── Inf/NaN count: {gathered_interval_inf_or_nan_count}")
 
     def _log_evaluation_results(
         self, evaluation_results: Dict[str, Any], gradient_step: int
     ):
         """Log model evaluation metrics to experiment tracking system and console."""
-        self.log(f"Step {gradient_step} -- Evaluation Results:")
-        for metric, result in evaluation_results.items():
-            self.log(f"  {metric}: {result}")
+        self.log(f"Step {gradient_step} -- 📊 Evaluation Results")
+        for i, (metric, result) in enumerate(evaluation_results.items()):
+            prefix = "└──" if i == len(evaluation_results) - 1 else "├──"
+            self.log(f"{prefix} {metric}: {result}")
             self.fabric.log(f"eval/{metric}", result, step=gradient_step)
 
     @rank_zero_only
