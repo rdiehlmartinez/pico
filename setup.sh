@@ -95,6 +95,11 @@ print_section "Environment Variables"
 if [ -f .env ]; then
     print_success "Loading environment variables from .env..."
     source .env
+    if [[ -n "$HF_TOKEN" && -n "$WANDB_API_KEY" ]]; then
+        print_success "Both HF_TOKEN and WANDB_API_KEY are set and loaded!"
+    else
+        print_warning "One or both of HF_TOKEN and WANDB_API_KEY are not set."
+    fi
 else
     print_warning "No .env file found."
     echo -e "${YELLOW}    You might need to create one with HF_TOKEN and WANDB_API_KEY${NC}"
