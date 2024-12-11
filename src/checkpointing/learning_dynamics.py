@@ -11,17 +11,21 @@ import torch.nn.functional as F
 # typing imports
 import torch.nn as nn
 from typing import Dict, Any
-from src.config import LearningDynamicsConfig
+from src.config import CheckpointingConfig
+from src.config.checkpointing_config import LearningDynamicsCheckpointingConfig
 from lightning.fabric import Fabric
 
 
-class CheckpointStates:
+class LearningDynamicsStates:
     """
-    Class to save the revelant states for a given checkpoint step.
+    Class to extract and save the states of a model at a given checkpoint step for learning
+    dynamics states.
     """
 
     def __init__(
-        self, learning_dynamics_config: LearningDynamicsConfig, model: nn.Module
+        self,
+        learning_dynamics_config: LearningDynamicsCheckpointingConfig,
+        model: nn.Module,
     ):
         self.learning_dynamics_config = learning_dynamics_config
         self.model = model
@@ -121,7 +125,7 @@ class CheckpointStates:
         # Extract gradients from the target tensors of the model
         # -----------------------------------------------------
 
-        target_layers_suffix = self.learning_dynamics_config.activation_layers
+        target_layers_suffix = self.learning_dynamics_config.layer_suffixes
         checkpoint_gradients = {}
         if compute_gradients:
             for name, param in self.model.named_parameters():
@@ -209,8 +213,8 @@ class CheckpointStates:
         return _forward_hook
 
 
-def compute_learning_dynamics_metrics(
-    learning_dynamics_config: LearningDynamicsConfig,
+def compute_learning_dynamics_states(
+    checkpointing_config: CheckpointingConfig,
     fabric: Fabric,
     model: nn.Module,
     train_data_batch: Dict[str, Any] = None,
@@ -225,7 +229,9 @@ def compute_learning_dynamics_metrics(
         return
 
     # setup forward hooks for the model to save activations and weights at each layer
-    checkpoint_states = CheckpointStates(learning_dynamics_config, model)
+    checkpoint_states = LearningDynamicsStates(
+        checkpointing_config.learning_dynamics, model
+    )
     checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
         checkpoint_states.extract_states(train_data_batch, compute_gradients=True)
     )

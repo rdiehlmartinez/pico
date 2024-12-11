@@ -10,23 +10,24 @@ from ._constants import VOCAB_SIZE, BATCH_SIZE, MAX_SEQ_LEN, GRADIENT_ACCUMULATI
 
 
 @dataclass
-class _DatasetConfig:
+class DatasetConfig:
     name: str = "pico-lm/pretokenized-dolma"
 
 
 @dataclass
-class _DataLoaderConfig:
+class DataLoaderConfig:
     batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
     max_seq_len: int = MAX_SEQ_LEN
 
 
-class _TokenizerConfig:
+@dataclass
+class TokenizerConfig:
     name: str = "allenai/OLMo-7B-0724-hf"
     vocab_size: int = VOCAB_SIZE
 
 
 @dataclass
 class DataConfig:
-    dataset: _DatasetConfig = field(default_factory=_DatasetConfig)
-    dataloader: _DataLoaderConfig = field(default_factory=_DataLoaderConfig)
-    tokenizer: _TokenizerConfig = field(default_factory=_TokenizerConfig)
+    dataset: DatasetConfig = field(default_factory=DatasetConfig)
+    dataloader: DataLoaderConfig = field(default_factory=DataLoaderConfig)
+    tokenizer: TokenizerConfig = field(default_factory=TokenizerConfig)

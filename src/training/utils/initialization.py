@@ -23,7 +23,14 @@ from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
 
-from src.config import TrainingConfig, DataConfig, ModelConfig, EvaluationConfig
+from src.config import (
+    TrainingConfig,
+    DataConfig,
+    ModelConfig,
+    EvaluationConfig,
+    LoggingConfig,
+    CheckpointingConfig,
+)
 
 from lightning.fabric.loggers import Logger as FabricLogger
 
@@ -35,8 +42,7 @@ from lightning.fabric.loggers import Logger as FabricLogger
 
 
 def _apply_config_overrides(config, overrides: dict):
-    """
-    Recursively apply configuration overrides to a dataclass config object.
+    """Recursively apply configuration overrides to a dataclass config object.
 
     Args:
         config: Base configuration object (must be a dataclass)
@@ -57,31 +63,37 @@ def _apply_config_overrides(config, overrides: dict):
 
 def initialize_configuration(
     config_path: Optional[str] = None,
-) -> Dict[str, Union[DataConfig, ModelConfig, TrainingConfig, EvaluationConfig]]:
+) -> Dict[
+    str,
+    Union[
+        DataConfig,
+        ModelConfig,
+        TrainingConfig,
+        EvaluationConfig,
+        LoggingConfig,
+        CheckpointingConfig,
+    ],
+]:
     """Initialize configuration objects with optional overrides from a YAML file.
 
-    Initializes the default config data classes, and then applies any overrides specified in
-    the given config path.
+    This function initializes all of the configuration objects, and then applies
+    any overrides from the config_path file. If no config_path is provided,
+    the function will use the default configuration objects.
 
     Args:
-        config_path: Optional path to a YAML file containing configuration overrides.
-            The YAML structure should match the config class structure.
+        config_path: Path to a YAML file containing configuration overrides.
 
     Returns:
-        sub_configs: A dictionary containing the initialized configuration objects.
-
-    Example:
-        >>> sub_configs = initialize_configuration("config.yaml")
+        A dictionary containing the initialized configuration objects.
     """
     data_config = DataConfig()
     model_config = ModelConfig()
     training_config = TrainingConfig()
     evaluation_config = EvaluationConfig()
+    logging_config = LoggingConfig()
+    checkpointing_config = CheckpointingConfig()
 
     if config_path:
-        # NOTE: Config overriding logic - this can be reimplemented by users in any number of
-        # different ways (e.g., hydra config setup); here I'm trying to setup the simplest possible
-        # config override system that is still flexible and extendable.
         overrides = yaml.safe_load(open(config_path, "r"))
         data_config = _apply_config_overrides(data_config, overrides.get("data", {}))
         model_config = _apply_config_overrides(model_config, overrides.get("model", {}))
@@ -91,40 +103,45 @@ def initialize_configuration(
         evaluation_config = _apply_config_overrides(
             evaluation_config, overrides.get("evaluation", {})
         )
+        logging_config = _apply_config_overrides(
+            logging_config, overrides.get("logging", {})
+        )
+        checkpointing_config = _apply_config_overrides(
+            checkpointing_config, overrides.get("checkpointing", {})
+        )
 
-    sub_configs = {
+    configs = {
         "data": data_config,
         "model": model_config,
         "training": training_config,
         "evaluation": evaluation_config,
+        "logging": logging_config,
+        "checkpointing": checkpointing_config,
     }
 
-    return sub_configs
+    return configs
 
 
-def initialize_run_dir(
-    training_config: TrainingConfig, evaluation_config: EvaluationConfig
-) -> str:
+def initialize_run_dir(checkpointing_config: CheckpointingConfig) -> str:
     """Initialize a directory for the current training run.
 
-    Creates a unique directory for storing training artifacts (checkpoints, logs, etc.).
+    Creates a unique directory for storing training, evaluation, and logging artifacts.
     If no run name is specified in the config, generates a timestamp-based name.
 
     Args:
-        training_config: Configuration object containing run settings.
-            Must have a 'run_name' attribute that can be None.
+        checkpointing_config: Configuration object containing run settings.
+            NOTE: Must have a 'run_name' attribute that can be None, in which case
+            a timestamp-based name will be generated.
 
     Returns:
         str: The path to the run directory.
     """
-    run_name = training_config.run_name
+    run_name = checkpointing_config.run_name
     if run_name is None:
         run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        training_config.run_name = run_name
+        checkpointing_config.run_name = run_name
 
-    evaluation_config.run_name = run_name
-
-    run_dir = os.path.join(training_config.runs_dir, run_name)
+    run_dir = os.path.join(checkpointing_config.runs_dir, run_name)
 
     os.makedirs(run_dir, exist_ok=True)
     return run_dir
@@ -193,7 +210,6 @@ def initialize_tokenizer(data_config: DataConfig):
 
     Args:
         data_config: Configuration object containing tokenizer settings.
-            Must have a tokenizer.name attribute specifying the HuggingFace tokenizer ID.
 
     Returns:
         AutoTokenizer: A HuggingFace tokenizer instance.
@@ -210,11 +226,10 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
 
     You might also want to extend this function to add a sampler, or some sort of custom
     collate function. For the default dataset, we don't need any of this, because the data are
-    pre-shuffled, and pre-tokenized just for you.
+    pre-shuffled, and pre-tokenized.
 
     Args:
         data_config: Configuration object containing dataloader settings.
-            Must have a dataloader.batch_size attribute.
         dataset: A HuggingFace Dataset object containing tokenized text data.
             Expected to have 'input_ids' field in its items.
 
@@ -245,7 +260,7 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
 ########################################################
 
 
-def initialize_optimizer(model, training_config: TrainingConfig):
+def initialize_optimizer(training_config: TrainingConfig, model: torch.nn.Module):
     """Initialize the optimizer for model training.
 
     Creates an optimizer instance based on the configuration settings.
@@ -253,11 +268,11 @@ def initialize_optimizer(model, training_config: TrainingConfig):
     Add whatever other optimizers you want here.
 
     Args:
-        model: PyTorch model whose parameters will be optimized.
         training_config: Configuration object containing optimizer settings.
             Must have:
             - optimization.optimizer (str): Name of the optimizer ("adamw")
             - optimization.lr (float): Learning rate for the optimizer
+        model: PyTorch model whose parameters will be optimized.
 
     Returns:
         torch.optim.Optimizer: Configured optimizer instance.
@@ -274,22 +289,20 @@ def initialize_optimizer(model, training_config: TrainingConfig):
     return optimizer
 
 
-def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
+def initialize_lr_scheduler(
+    training_config: TrainingConfig, optimizer: torch.optim.Optimizer
+):
     """Initialize a learning rate scheduler with warmup and decay.
 
     The default is a learning rate scheduler that implements a linear warmup followed by
     linear decay. The learning rate increases linearly from 0 to the initial lr
     during warmup, then decreases linearly to 0 during the remaining steps.
 
-    Implement other types of learning rate schedulers here as well.
+    Add other types of learning rate schedulers here.
 
     Args:
+        training_config: Configuration object containing optimizer and scheduler settings.
         optimizer: PyTorch optimizer whose learning rate will be scheduled.
-        training_config: Configuration object containing scheduler settings.
-            Must have:
-            - optimization.lr_scheduler (str): Scheduler type ("linear_with_warmup")
-            - optimization.lr_warmup_steps (int): Number of warmup steps
-            - training_steps (int): Total number of training steps
 
     Returns:
         torch.optim.lr_scheduler.LambdaLR: Learning rate scheduler instance.
@@ -298,20 +311,20 @@ def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
     if training_config.optimization.lr_scheduler == "linear_with_warmup":
         # Credit where credit is due:
         # https://github.com/huggingface/transformers/blob/e71a01a104dd663c730e494eb0b6467bb51df357/src/transformers/optimization.py#L102
-        def _lr_lambda(curr_step, num_warmup_steps, num_training_steps):
+        def _lr_lambda(curr_step, num_warmup_steps, max_steps):
             if curr_step < num_warmup_steps:
                 return float(curr_step) / float(max(1, num_warmup_steps))
             else:
                 return max(
                     0.0,
-                    float(num_training_steps - curr_step)
-                    / float(max(1, num_training_steps - num_warmup_steps)),
+                    float(max_steps - curr_step)
+                    / float(max(1, max_steps - num_warmup_steps)),
                 )
 
         lr_lambda = lambda step: _lr_lambda(  # noqa: E731
             step,
             training_config.optimization.lr_warmup_steps,
-            training_config.training_steps,
+            training_config.max_steps,
         )
         lr_scheduler = torch.optim.lr_scheduler.LambdaLR(
             optimizer,
@@ -332,29 +345,28 @@ def initialize_lr_scheduler(optimizer, training_config: TrainingConfig):
 ########################################################
 
 
-def _initialize_log_file(training_config: TrainingConfig) -> str:
+def _initialize_log_file(checkpointing_config: CheckpointingConfig) -> str:
     """Create and initialize a timestamped log file in the run's log directory.
 
     Sets up a log file with a unique timestamp in the run's logging directory.
     Creates the necessary directory structure if it doesn't exist.
 
     Directory Structure:
-        {training_config.runs_dir}/
-        └── {training_config.run_name}/
-            └── {training_config.logs_dir}/
+        {checkpointing_config.runs_dir}/
+        └── {checkpointing_config.run_name}/
+            └── {checkpointing_config.logs_dir}/
                 └── log_YYYYMMDD_HHMMSS.txt
 
     Args:
-        training_config: Configuration object containing run settings.
-            Must have run_name attribute for directory structure.
+        checkpointing_config: Configuration object containing checkpointing settings.
 
     Returns:
         str: Absolute path to the created log file.
 
     """
 
-    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
-    logs_dir = os.path.join(run_dir, training_config.logs_dir)
+    run_dir = os.path.join(checkpointing_config.runs_dir, checkpointing_config.run_name)
+    logs_dir = os.path.join(run_dir, checkpointing_config.logs_dir)
     os.makedirs(logs_dir, exist_ok=True)
 
     # datetime stamp
@@ -367,7 +379,9 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
     return log_file_path
 
 
-def initialize_logging(training_config: TrainingConfig):
+def initialize_logging(
+    logging_config: LoggingConfig, checkpointing_config: CheckpointingConfig
+):
     """Initialize logging system with file, console, and optional experiment tracking.
 
     Sets up a comprehensive logging system that includes:
@@ -376,12 +390,8 @@ def initialize_logging(training_config: TrainingConfig):
     3. Optional experiment tracking integration (pico by default supports Weights & Biases)
 
     Args:
-        training_config: Configuration object containing logging settings.
-            Must have:
-            - run_name (str): Name of the current run
-            - logging.experiment_tracker (str): Type of experiment tracker ("wandb" or None)
-            - logging.wandb_project (str, optional): W&B project name if using wandb
-            - logging.wandb_entity (str, optional): W&B entity name if using wandb
+        logging_config: Configuration object containing logging settings.
+        checkpointing_config: Configuration object containing checkpointing settings.
 
     Returns:
         tuple: (logger, experiment_tracker)
@@ -395,7 +405,7 @@ def initialize_logging(training_config: TrainingConfig):
     logger.setLevel(logging.INFO)
 
     # Create file handler
-    log_file_path = _initialize_log_file(training_config)
+    log_file_path = _initialize_log_file(checkpointing_config)
     file_handler = logging.FileHandler(log_file_path)
     file_handler.setLevel(logging.INFO)
 
@@ -418,38 +428,39 @@ def initialize_logging(training_config: TrainingConfig):
     # Add whatever other experiment trackers here that you want to use here.
 
     experiment_tracker = None
-    if training_config.logging.experiment_tracker == "wandb":
+    if logging_config.experiment_tracker == "wandb":
         assert (
-            training_config.logging.wandb_project is not None
+            logging_config.wandb_project is not None
         ), "Wandb project must be provided if wandb is to be used."
         assert (
-            training_config.logging.wandb_entity is not None
+            logging_config.wandb_entity is not None
         ), "Wandb entity must be provided if wandb is to be used."
 
         _run_id = None
         if (
-            training_config.checkpointing.load_checkpoint_path
-            or training_config.checkpointing.load_latest_checkpoint
+            checkpointing_config.training.load_checkpoint_path
+            or checkpointing_config.training.load_latest_checkpoint
         ):
             # If we are loading a checkpoint, we can try to find the run id of the previous run
             previous_runs = wandb.Api().runs(
-                path="pico-lm/pico", filters={"display_name": training_config.run_name}
+                path="pico-lm/pico",
+                filters={"display_name": checkpointing_config.run_name},
             )
             if len(previous_runs) == 1:
                 _run_id = previous_runs[0].id
 
         experiment_tracker = WandbLogger(
-            project=training_config.logging.wandb_project,
-            entity=training_config.logging.wandb_entity,
+            project=logging_config.wandb_project,
+            entity=logging_config.wandb_entity,
             id=_run_id,
-            name=training_config.run_name,
+            name=checkpointing_config.run_name,
         )
     elif (
-        training_config.logging.experiment_tracker is not None
-        and training_config.logging.experiment_tracker != ""
+        logging_config.experiment_tracker is not None
+        and logging_config.experiment_tracker != ""
     ):
         raise ValueError(
-            f"Invalid experiment tracker: {training_config.logging.experiment_tracker}"
+            f"Invalid experiment tracker: {logging_config.experiment_tracker}"
         )
 
     return logger, experiment_tracker
@@ -462,7 +473,7 @@ def initialize_logging(training_config: TrainingConfig):
 ########################################################k
 
 
-def initialize_checkpointing(training_config: TrainingConfig):
+def initialize_checkpointing(checkpointing_config: CheckpointingConfig):
     """Initialize model checkpointing functionality.
 
     Sets up the infrastructure for saving model checkpoints, with support for
@@ -470,15 +481,14 @@ def initialize_checkpointing(training_config: TrainingConfig):
     and branches if they don't exist.
 
     Directory Structure:
-        training_config.runs_dir/
-        └── {training_config.run_name}/
-            └── training_config.checkpoints_dir/
+        {checkpointing_config.runs_dir}/
+        └── {checkpointing_config.run_name}/
+            └── {checkpointing_config.checkpoints_dir}/
                 └── step_{step_number}/
                     └── ...
 
     Args:
-        training_config: Configuration object containing checkpointing settings
-            (HuggingFace repo ID, etc.).
+        checkpointing_config: Configuration object containing checkpointing settings.
 
     Raises:
         RuntimeError: If unable to create HuggingFace repository after multiple attempts.
@@ -489,7 +499,7 @@ def initialize_checkpointing(training_config: TrainingConfig):
         - Sets up local repository for pushing checkpoints
     """
 
-    huggingface_repo_id = training_config.checkpointing.save_checkpoint_repo_id
+    huggingface_repo_id = checkpointing_config.save_checkpoint_repo_id
     if huggingface_repo_id is None:
         return
 
@@ -498,8 +508,8 @@ def initialize_checkpointing(training_config: TrainingConfig):
     from huggingface_hub.errors import HfHubHTTPError
     from huggingface_hub.repository import Repository
 
-    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
-    checkpoint_dir = os.path.join(run_dir, training_config.checkpoints_dir)
+    run_dir = os.path.join(checkpointing_config.runs_dir, checkpointing_config.run_name)
+    checkpoint_dir = os.path.join(run_dir, checkpointing_config.checkpoints_dir)
 
     _repo_sleep_time = 1
     _repo_created = False
@@ -521,11 +531,11 @@ def initialize_checkpointing(training_config: TrainingConfig):
 
     # create branch
     create_branch(
-        repo_id=huggingface_repo_id, branch=training_config.run_name, exist_ok=True
+        repo_id=huggingface_repo_id, branch=checkpointing_config.run_name, exist_ok=True
     )
 
     _ = Repository(
         checkpoint_dir,
         clone_from=huggingface_repo_id,
-        revision=training_config.run_name,
+        revision=checkpointing_config.run_name,
     )

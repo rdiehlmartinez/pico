@@ -12,7 +12,7 @@ GRADIENT_ACCUMULATION_STEPS = (
 
 # Directories used to store training runs, checkpoints, logs, and evaluation results
 RUNS_DIR = "runs"
-CHECKPOINT_DIR = "checkpoints"
-LOG_DIR = "logs"
+CHECKPOINTS_DIR = "checkpoints"
+LOGS_DIR = "logs"
 FABRIC_CHECKPOINT_DIR = "fabric_state"
 EVAL_RESULTS_DIR = "eval_results"
