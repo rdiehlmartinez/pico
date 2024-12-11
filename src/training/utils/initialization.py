@@ -21,18 +21,11 @@ from wandb.integration.lightning.fabric import WandbLogger
 from datasets import load_dataset, Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
+from typing import Optional, Dict, Union
 
-from typing import Optional
-from config import (
-    DataConfig,
-    ModelConfig,
-    TrainingConfig,
-    EvaluationConfig,
-)
+from src.config import TrainingConfig, DataConfig, ModelConfig, EvaluationConfig
 
 from lightning.fabric.loggers import Logger as FabricLogger
-
-from . import RUNS_DIR, CHECKPOINT_DIR
 
 ########################################################
 #
@@ -62,7 +55,9 @@ def _apply_config_overrides(config, overrides: dict):
     return config
 
 
-def initialize_config(config_path: Optional[str] = None):
+def initialize_configuration(
+    config_path: Optional[str] = None,
+) -> Dict[str, Union[DataConfig, ModelConfig, TrainingConfig, EvaluationConfig]]:
     """Initialize configuration objects with optional overrides from a YAML file.
 
     Initializes the default config data classes, and then applies any overrides specified in
@@ -73,11 +68,10 @@ def initialize_config(config_path: Optional[str] = None):
             The YAML structure should match the config class structure.
 
     Returns:
-        tuple: (DataConfig, ModelConfig, TrainingConfig, EvaluationConfig) containing
-            the initialized configuration objects.
+        sub_configs: A dictionary containing the initialized configuration objects.
 
     Example:
-        >>> data_config, model_config, training_config, eval_config = initialize_config("config.yaml")
+        >>> sub_configs = initialize_configuration("config.yaml")
     """
     data_config = DataConfig()
     model_config = ModelConfig()
@@ -98,10 +92,19 @@ def initialize_config(config_path: Optional[str] = None):
             evaluation_config, overrides.get("evaluation", {})
         )
 
-    return data_config, model_config, training_config, evaluation_config
+    sub_configs = {
+        "data": data_config,
+        "model": model_config,
+        "training": training_config,
+        "evaluation": evaluation_config,
+    }
+
+    return sub_configs
 
 
-def initialize_run_dir(training_config: TrainingConfig):
+def initialize_run_dir(
+    training_config: TrainingConfig, evaluation_config: EvaluationConfig
+) -> str:
     """Initialize a directory for the current training run.
 
     Creates a unique directory for storing training artifacts (checkpoints, logs, etc.).
@@ -112,16 +115,19 @@ def initialize_run_dir(training_config: TrainingConfig):
             Must have a 'run_name' attribute that can be None.
 
     Returns:
-        None
+        str: The path to the run directory.
     """
     run_name = training_config.run_name
     if run_name is None:
         run_name = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
         training_config.run_name = run_name
 
-    run_dir = os.path.join(RUNS_DIR, run_name)
+    evaluation_config.run_name = run_name
+
+    run_dir = os.path.join(training_config.runs_dir, run_name)
 
     os.makedirs(run_dir, exist_ok=True)
+    return run_dir
 
 
 def initialize_fabric(
@@ -333,9 +339,9 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
     Creates the necessary directory structure if it doesn't exist.
 
     Directory Structure:
-        RUNS_DIR/
-        └── {run_name}/
-            └── logs/
+        {training_config.runs_dir}/
+        └── {training_config.run_name}/
+            └── {training_config.logs_dir}/
                 └── log_YYYYMMDD_HHMMSS.txt
 
     Args:
@@ -347,8 +353,8 @@ def _initialize_log_file(training_config: TrainingConfig) -> str:
 
     """
 
-    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    logs_dir = os.path.join(run_dir, "logs")
+    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
+    logs_dir = os.path.join(run_dir, training_config.logs_dir)
     os.makedirs(logs_dir, exist_ok=True)
 
     # datetime stamp
@@ -464,9 +470,9 @@ def initialize_checkpointing(training_config: TrainingConfig):
     and branches if they don't exist.
 
     Directory Structure:
-        RUNS_DIR/
-        └── {run_name}/
-            └── CHECKPOINT_DIR/
+        training_config.runs_dir/
+        └── {training_config.run_name}/
+            └── training_config.checkpoints_dir/
                 └── step_{step_number}/
                     └── ...
 
@@ -492,8 +498,8 @@ def initialize_checkpointing(training_config: TrainingConfig):
     from huggingface_hub.errors import HfHubHTTPError
     from huggingface_hub.repository import Repository
 
-    run_dir = os.path.join(RUNS_DIR, training_config.run_name)
-    checkpoint_dir = os.path.join(run_dir, CHECKPOINT_DIR)
+    run_dir = os.path.join(training_config.runs_dir, training_config.run_name)
+    checkpoint_dir = os.path.join(run_dir, training_config.checkpoints_dir)
 
     _repo_sleep_time = 1
     _repo_created = False
