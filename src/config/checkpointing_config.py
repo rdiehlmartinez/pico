@@ -14,6 +14,9 @@ from ._constants import (
     LOGS_DIR,
     FABRIC_CHECKPOINT_DIR,
     EVAL_RESULTS_DIR,
+    MAX_SEQ_LEN,
+    BATCH_SIZE,
+    GRADIENT_ACCUMULATION_STEPS,
 )
 
 
@@ -32,7 +35,20 @@ class EvaluationCheckpointingConfig:
 @dataclass
 class LearningDynamicsCheckpointingConfig:
     # Suffixes of the layers to compute learning dynamics for
-    layer_suffixes: List[str] = field(default_factory=lambda: [])
+    layer_suffixes: List[str] = field(
+        default_factory=lambda: [
+            "attention.v_proj",
+            "attention.o_proj",
+            "feed_forward.w_2",
+        ]
+    )
+
+    # Sequence index at which to extract hidden states; by default, we extract the hidden states
+    # at the last token of the sequence
+    sequence_idx: int = MAX_SEQ_LEN - 1
+
+    # size of the sub-batch used for extracting learning dynamics states
+    sub_batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
 
     # Path to the evaluation data batch - used across learning dynamics checkpointing for consistency
     eval_data_batch: Optional[str] = "pico-lm/pretokenized-eval-batch"

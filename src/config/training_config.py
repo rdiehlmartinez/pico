@@ -5,6 +5,7 @@ Specifies the hyperparameters for the training process, i.e. the optimizer, lear
 """
 
 from dataclasses import dataclass, field
+from ._constants import GRADIENT_ACCUMULATION_STEPS
 
 
 @dataclass
@@ -29,7 +30,7 @@ class OptimizationConfig:
     max_norm: float = 1.0
 
     # Gradient Accumulation
-    gradient_accumulation_steps: int = 32
+    gradient_accumulation_steps: int = GRADIENT_ACCUMULATION_STEPS
 
 
 @dataclass

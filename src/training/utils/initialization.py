@@ -249,15 +249,15 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
     """
 
     def _collate_fn(batch):
-        collated_batch = {"input_ids": [entry["input_ids"] for entry in batch]}
-        return collated_batch
+        return {"input_ids": [entry["input_ids"] for entry in batch]}
 
-    # NOTE: We divide the batch size by the gradient accumulation steps to ensure that the
-    # effective batch size is correct.
+    # NOTE: We use the sub-batch size for the dataloader, which is the full batch size
+    # divided by the gradient accumulation steps. This ensures that the effective batch size
+    # is correct.
 
     return DataLoader(
         dataset,
-        batch_size=data_config.dataloader.batch_size,
+        batch_size=data_config.dataloader.sub_batch_size,
         shuffle=False,  # Keep sequential for streaming datasets
         pin_memory=True,  # Speeds up transfer to GPU
         collate_fn=_collate_fn,

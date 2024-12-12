@@ -13,14 +13,13 @@ from huggingface_hub import upload_folder
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 
 # typing imports
-from torch.utils.data import DataLoader
 from torch.optim import Optimizer
 from torch.optim.lr_scheduler import LRScheduler
 from torch import nn
 from transformers import PreTrainedTokenizerBase
 from lightning.fabric import Fabric
 from src.config import CheckpointingConfig
-from typing import Optional, Dict, Any
+from typing import Dict, Any
 
 
 def load_checkpoint(
@@ -29,7 +28,6 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
-    train_dataloader: Optional[DataLoader] = None,
 ):
     """
     Load model checkpoint and associated states from disk or latest checkpoint.
@@ -42,7 +40,6 @@ def load_checkpoint(
         model: The model instance to load weights into
         optimizer: The optimizer instance to load states into
         lr_scheduler: The learning rate scheduler to load states into
-        train_dataloader: Optional dataloader to fast-forward to the saved step
 
     Returns:
         If train_dataloader is provided:
@@ -89,18 +86,11 @@ def load_checkpoint(
     optimizer.load_state_dict(optimizer_state["optimizer"])
     lr_scheduler.load_state_dict(optimizer_state["lr_scheduler"])
 
-    step = training_state["step"]
-    if train_dataloader is not None:
-        train_iterator = iter(train_dataloader)
-        for _ in range(step):
-            next(train_iterator)
-
+    # NOTE: need to fast-forward to the
+    gradient_step = training_state["gradient_step"]
     _set_rng_states(training_state["rng_state"])
 
-    if train_dataloader is not None:
-        return model, optimizer, lr_scheduler, step, train_iterator
-    else:
-        return model, optimizer, lr_scheduler, step
+    return model, optimizer, lr_scheduler, gradient_step
 
 
 def save_checkpoint(
@@ -110,7 +100,7 @@ def save_checkpoint(
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
     tokenizer: PreTrainedTokenizerBase,
-    step: int,
+    gradient_step: int,
     upload_logs: bool = True,
 ):
     """
@@ -133,7 +123,7 @@ def save_checkpoint(
     {checkpointing_config.runs_dir}/
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.checkpoints_dir}/
-                ├── step_{step}/
+                ├── step_{gradient_step}/
                 │   ├── config.json              # HuggingFace model config
                 │   ├── pytorch_model.bin        # HuggingFace model weights
                 │   ├── vocab.json               # Tokenizer vocab
@@ -143,7 +133,7 @@ def save_checkpoint(
                 │      ├── model.pt              # Fabric model state
                 │      ├── optimizer.pt          # Optimizer and LR scheduler states
                 │      └── training.pt           # Training progress and RNG states
-                └── latest -> step_{step}/
+                └── latest -> step_{gradient_step}/
 
     Args:
         configs: A dictionary containing the initialized configuration objects.
@@ -152,7 +142,7 @@ def save_checkpoint(
         optimizer: The optimizer instance to save
         lr_scheduler: The learning rate scheduler to save
         tokenizer: The tokenizer to save
-        step: Current training step
+        gradient_step: Current training gradient step (i.e. number of learning steps taken)
         upload_logs: Whether to upload training logs to HF Hub (default: True)
 
     Notes:
@@ -175,7 +165,7 @@ def save_checkpoint(
 
     run_path = os.path.join(runs_dir, checkpointing_config.run_name)
     root_checkpoint_path = os.path.join(run_path, checkpoints_dir)
-    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{step}")
+    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{gradient_step}")
 
     # Create directories
     os.makedirs(root_checkpoint_path, exist_ok=True)
@@ -222,7 +212,7 @@ def save_checkpoint(
     training_state_path = os.path.join(fabric_checkpoint_path, "training.pt")
     if not os.path.exists(training_state_path):
         training_state = {
-            "step": step,
+            "gradient_step": gradient_step,
             "rng_state": _collect_rng_states(),
         }
         fabric.save(training_state_path, training_state)
@@ -237,7 +227,7 @@ def save_checkpoint(
     latest_symlink_path = os.path.join(root_checkpoint_path, "latest")
     if os.path.lexists(latest_symlink_path):
         os.remove(latest_symlink_path)
-    os.symlink(f"step_{step}", latest_symlink_path, target_is_directory=True)
+    os.symlink(f"step_{gradient_step}", latest_symlink_path, target_is_directory=True)
 
     ########################################################
     #
@@ -250,7 +240,7 @@ def save_checkpoint(
         # Upload the HF model
         hf_model.push_to_hub(
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving HF Model -- Step {step}",
+            commit_message=f"Saving HF Model -- Step {gradient_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )
@@ -260,7 +250,7 @@ def save_checkpoint(
             folder_path=fabric_checkpoint_path,
             path_in_repo=fabric_checkpoint_dir,
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Fabric Checkpoint -- Step {step}",
+            commit_message=f"Saving Fabric Checkpoint -- Step {gradient_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )
@@ -272,7 +262,7 @@ def save_checkpoint(
                 folder_path=logs_path,
                 path_in_repo=logs_dir,
                 repo_id=checkpointing_config.save_checkpoint_repo_id,
-                commit_message=f"Saving Logs -- Step {step}",
+                commit_message=f"Saving Logs -- Step {gradient_step}",
                 revision=checkpointing_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )

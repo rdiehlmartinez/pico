@@ -5,29 +5,34 @@ Utilities for checkpointing learning dynamics-related states (i.e. activations, 
 import torch
 import gc
 import re
+import copy
 
 import torch.nn.functional as F
+from torch.utils.data import DataLoader
 
 # typing imports
 import torch.nn as nn
-from typing import Dict, Any
+from torch.utils.data import Dataset
+from typing import Dict
 from src.config import CheckpointingConfig
 from src.config.checkpointing_config import LearningDynamicsCheckpointingConfig
 from lightning.fabric import Fabric
 
 
-class LearningDynamicsStates:
+class CheckpointStateExtractor:
     """
     Class to extract and save the states of a model at a given checkpoint step for learning
-    dynamics states.
+    dynamics research.
     """
 
     def __init__(
         self,
         learning_dynamics_config: LearningDynamicsCheckpointingConfig,
+        fabric: Fabric,
         model: nn.Module,
     ):
         self.learning_dynamics_config = learning_dynamics_config
+        self.fabric = fabric
         self.model = model
 
     @staticmethod
@@ -42,7 +47,7 @@ class LearningDynamicsStates:
             if activations.shape[0] > batch_index:
                 checkpoint_activations[layer_name] = activations[:batch_index]
 
-    def extract_states(self, batch, compute_gradients: bool = False):
+    def extract_states(self, dataloader, compute_gradients: bool = False):
         """
         Perform a forward pass of the model on a given batch of data; assumes that the model
         has hooks setup to save the hidden states at each layer.
@@ -50,22 +55,27 @@ class LearningDynamicsStates:
         checkpoint_activations = {}
         checkpoint_weights = {}
 
+        batch = None
+
         forward_hooks = self._setup_forward_hooks(
             checkpoint_activations,
             checkpoint_weights,
         )
 
-        input_ids = batch["input_ids"]
-
         if compute_gradients:
-            # NOTE: labels are the input ids shifted over by one
-            input_ids = input_ids[:, 1:]
-            labels = input_ids[:, 1:]
+            if "labels" in batch:
+                input_ids = batch["input_ids"]
+                labels = batch["labels"]
+            else:
+                # NOTE: labels are the input ids shifted over by one
+                input_ids = batch["input_ids"][:, :-1]
+                labels = batch["input_ids"][:, 1:]
         else:
+            input_ids = batch["input_ids"]
             labels = None
 
         batch_index = 0
-        full_batch_size = batch.shape[0]
+        full_batch_size = input_ids.shape[0]
 
         sub_batch_size = 1
         max_sub_batch_size = None
@@ -75,12 +85,13 @@ class LearningDynamicsStates:
         # -----------------------------------------------------
 
         while batch_index < full_batch_size:
+            print(f"batch_index: {batch_index}, full_batch_size: {full_batch_size}")
             try:
                 if max_sub_batch_size is not None:
                     sub_batch_size = max_sub_batch_size
 
                 batch_end_index = min(batch_index + sub_batch_size, full_batch_size)
-                _inputs = batch["input_ids"][batch_index:batch_end_index]
+                _inputs = input_ids[batch_index:batch_end_index]
 
                 if labels is not None:
                     # NOTE: If labels are present, then we are iterating over the gradient batches
@@ -94,10 +105,11 @@ class LearningDynamicsStates:
                     outputs, _ = self.model(_inputs)
                     outputs = outputs.transpose(1, 2)
                     loss = F.cross_entropy(outputs, _labels)
-                    loss.backward()
+                    self.fabric.backward(loss)
 
-            except RuntimeError:
+            except RuntimeError as e:
                 # NOTE: Exception is thrown when the batch size is too large for the GPU
+                print(f"RuntimeError: {e}")
 
                 if sub_batch_size == 1:
                     raise Exception("Batch size of 1 is too large for the GPU")
@@ -125,13 +137,13 @@ class LearningDynamicsStates:
         # Extract gradients from the target tensors of the model
         # -----------------------------------------------------
 
-        target_layers_suffix = self.learning_dynamics_config.layer_suffixes
+        layer_suffixes = self.learning_dynamics_config.layer_suffixes
         checkpoint_gradients = {}
         if compute_gradients:
             for name, param in self.model.named_parameters():
-                # only do this for the weight matrix of the target_layers_suffix
+                # only do this for the weight matrix of the layer_suffixes
                 if (
-                    any(suff_name in name for suff_name in target_layers_suffix)
+                    any(layer_suffix in name for layer_suffix in layer_suffixes)
                     and "weight" in name
                 ):
                     assert (
@@ -139,6 +151,9 @@ class LearningDynamicsStates:
                     ), "Gradient is None for layer: {name} at step: {step}"
                     name = re.sub(r"\.weight", "", name)
                     checkpoint_gradients[name] = param.grad.detach().cpu()
+
+        # zero out the gradients
+        self.model.zero_grad()
 
         return checkpoint_activations, checkpoint_weights, checkpoint_gradients
 
@@ -153,9 +168,10 @@ class LearningDynamicsStates:
         Setup forward hooks for the model to save activations and weights at each layer.
         """
         forward_hooks = []
-        target_layers = self.learning_dynamics_config.target_layers
+        layer_suffixes = self.learning_dynamics_config.layer_suffixes
+
         for name, module in self.model.named_modules():
-            if any(layer in name for layer in target_layers):
+            if any(layer_suffix in name for layer_suffix in layer_suffixes):
                 _forward_hook = module.register_forward_hook(
                     self._get_forward_hook(
                         name, checkpoint_activations, checkpoint_weights
@@ -168,38 +184,13 @@ class LearningDynamicsStates:
         self, module_name, checkpoint_activations, checkpoint_weights
     ):
         def _forward_hook(module, _, module_out):
-            if "attention.query_key_value" in module_name:
-                hidden_states_out = (
-                    module_out[..., 2 * module_out.shape[-1] // 3 :][:, -1, :]
-                    .detach()
-                    .cpu()
-                )
-
-            elif "attention.dense" in module_name:
-                # Get name of the qkv module in the same layer
-                qkv_module_name = module._global_module_name.replace(
-                    "attention.dense", "attention.query_key_value"
-                )
-                previous_module_output = checkpoint_activations[qkv_module_name]
-
-                curr_batch_size = module_out.shape[0]
-                previous_module_output = previous_module_output[-curr_batch_size:].to(
-                    "cuda"
-                )
-
-                # NOTE: need to call directly to not activate module hook
-                hidden_states_out = F.linear(
-                    previous_module_output, module.weight, module.bias
-                )
-                hidden_states_out = hidden_states_out.detach().cpu()
-
-            elif "mlp.dense_4h_to_h" in module_name:
-                hidden_states_out = module_out.detach().cpu()[:, -1, :]
+            sequence_idx = self.learning_dynamics_config.sequence_idx
+            activations = module_out[:, sequence_idx, :].detach().cpu()
 
             # check if there is already a key for the module name
-            if module_name not in self.checkpoint_activations:
+            if module_name not in checkpoint_activations:
                 # if there is no key, then we create a new key and store the hidden states
-                checkpoint_activations[module_name] = hidden_states_out
+                checkpoint_activations[module_name] = activations
 
                 # extract the weight matrix just once
                 weight_matrix = module.weight.detach().cpu()
@@ -207,7 +198,7 @@ class LearningDynamicsStates:
             else:
                 # if there is already a key, then we concatenate the new hidden states to the existing ones
                 checkpoint_activations[module_name] = torch.cat(
-                    (checkpoint_activations[module_name], hidden_states_out)
+                    (checkpoint_activations[module_name], activations)
                 )
 
         return _forward_hook
@@ -217,8 +208,8 @@ def compute_learning_dynamics_states(
     checkpointing_config: CheckpointingConfig,
     fabric: Fabric,
     model: nn.Module,
-    train_data_batch: Dict[str, Any] = None,
-    eval_data_batch: Dict[str, Any] = None,
+    dataset: Dataset,
+    compute_gradients: bool = False,
 ) -> Dict[str, torch.Tensor]:
     """
     Compute the learning dynamics metrics for a given checkpoint step.
@@ -228,26 +219,35 @@ def compute_learning_dynamics_states(
         fabric.barrier()
         return
 
+    def _collate_fn(batch):
+        return {"input_ids": [entry["input_ids"] for entry in batch]}
+
+    sub_batch_size = checkpointing_config.learning_dynamics.sub_batch_size
+    dataloader = DataLoader(
+        dataset, batch_size=sub_batch_size, shuffle=False, collate_fn=_collate_fn
+    )
+    extractor_dataloader = fabric.setup_dataloaders(dataloader)
+
+    # creating a copy of model with zero gradients
+    _model = copy.deepcopy(model)
+    _model.zero_grad()
+
     # setup forward hooks for the model to save activations and weights at each layer
-    checkpoint_states = LearningDynamicsStates(
-        checkpointing_config.learning_dynamics, model
+    state_extractor = CheckpointStateExtractor(
+        checkpointing_config.learning_dynamics, fabric, _model
     )
     checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
-        checkpoint_states.extract_states(train_data_batch, compute_gradients=True)
+        state_extractor.extract_states(
+            extractor_dataloader, compute_gradients=compute_gradients
+        )
     )
 
-    # if specified in config, run evaluation on the eval_data_batch
-    if eval_data_batch is not None:
-        eval_activations, eval_weights, _ = checkpoint_states.extract_states(
-            eval_data_batch, compute_gradients=False
-        )
+    fabric.barrier()
 
     return {
         "checkpoint_activations": checkpoint_activations,
         "checkpoint_weights": checkpoint_weights,
         "checkpoint_gradients": checkpoint_gradients,
-        "eval_activations": eval_activations,
-        "eval_weights": eval_weights,
     }
 
 

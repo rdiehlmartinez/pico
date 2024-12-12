@@ -16,7 +16,8 @@ class DatasetConfig:
 
 @dataclass
 class DataLoaderConfig:
-    batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
+    full_batch_size: int = BATCH_SIZE
+    sub_batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
     max_seq_len: int = MAX_SEQ_LEN
 
 

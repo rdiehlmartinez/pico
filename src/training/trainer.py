@@ -21,6 +21,8 @@ import torch.nn.functional as F
 import os
 from lightning.fabric.utilities.rank_zero import rank_zero_only
 
+from torch.utils.data import Dataset
+
 from typing import Dict, Any
 
 from src.model import Pico
@@ -41,7 +43,7 @@ from src.checkpointing import (
     load_checkpoint,
     save_checkpoint,
     save_evaluation_results,
-    # compute_learning_dynamics_metrics,
+    compute_learning_dynamics_states,
 )
 
 from src.evaluation import run_evaluation
@@ -133,19 +135,33 @@ class Trainer:
                     self.model,
                     self.optimizer,
                     self.lr_scheduler,
-                    self.train_start_step,
-                    self.train_iterator,
+                    self.train_start_gradient_step,
                 ) = resume_checkpoint
+
+                # NOTE: need to fast-forward to the start step
+                train_iterator = iter(self.train_dataloader)
+                sub_batch_step = (
+                    self.train_start_gradient_step
+                    * self.configs["training"].optimization.gradient_accumulation_steps
+                )
+                for _ in range(sub_batch_step):
+                    next(train_iterator)
+                self.train_iterator = train_iterator
 
         # Setup Training Start Step and Iterator
         if self.should_start_from_scratch:
-            self.train_start_step = 0
+            self.train_start_gradient_step = 0
             self.train_iterator = iter(self.train_dataloader)
 
         # Helper flag to determine if we should evaluate the model
         self.should_evaluate = (
             self.configs["evaluation"].evaluation_metrics is not None
             and len(self.configs["evaluation"].evaluation_metrics) > 0
+        )
+
+        self.should_compute_learning_dynamics = (
+            self.configs["checkpointing"].learning_dynamics.layer_suffixes is not None
+            and len(self.configs["checkpointing"].learning_dynamics.layer_suffixes) > 0
         )
 
     def train(self) -> None:
@@ -172,30 +188,32 @@ class Trainer:
             self.optimizer,
             self.lr_scheduler,
             self.tokenizer,
-            self.train_start_step,
+            self.train_start_gradient_step,
             upload_logs=False,
         )
 
         # Save Initial Evaluation Results
         if self.should_evaluate:
-            if self.train_start_step == 0:
+            if self.train_start_gradient_step == 0:
                 evaluation_results = run_evaluation(
                     self.configs["evaluation"],
                     self.configs["checkpointing"],
                     self.fabric,
                 )
-                self._log_evaluation_results(evaluation_results, self.train_start_step)
+                self._log_evaluation_results(
+                    evaluation_results, self.train_start_gradient_step
+                )
                 save_evaluation_results(
                     self.configs["checkpointing"],
                     self.fabric,
                     evaluation_results,
-                    self.train_start_step,
+                    self.train_start_gradient_step,
                 )
             else:
                 # NOTE: If the run crashed while evaluating, we need to restart the evaluation
                 eval_results_path = os.path.join(
                     self.configs["checkpointing"].evaluation.eval_results_dir,
-                    f"step_{self.train_start_step}.json",
+                    f"step_{self.train_start_gradient_step}.json",
                 )
                 if not os.path.exists(eval_results_path):
                     evaluation_results = run_evaluation(
@@ -204,20 +222,20 @@ class Trainer:
                         self.fabric,
                     )
                     self._log_evaluation_results(
-                        evaluation_results, self.train_start_step
+                        evaluation_results, self.train_start_gradient_step
                     )
                     save_evaluation_results(
                         self.configs["checkpointing"],
                         self.fabric,
                         evaluation_results,
-                        self.train_start_step,
+                        self.train_start_gradient_step,
                     )
 
-        if self.train_start_step < self.configs["training"].max_steps:
-            self.log(f"✨ Starting training from step {self.train_start_step}")
+        if self.train_start_gradient_step < self.configs["training"].max_steps:
+            self.log(f"✨ Starting training from step {self.train_start_gradient_step}")
             final_step = self._training_loop()
         else:
-            final_step = self.train_start_step
+            final_step = self.train_start_gradient_step
 
         # Handle checkpointing and final evaluation
         if final_step % self.configs["checkpointing"].save_every_n_steps != 0:
@@ -271,7 +289,7 @@ class Trainer:
                 NOTE: A complete training run should match the configured max_steps.
         """
         # Setup training loop variables
-        gradient_step = self.train_start_step
+        gradient_step = self.train_start_gradient_step
 
         # NOTE: these are used to compute the average loss over a training interval (more accurate
         # than using the loss at the end of the interval)
@@ -279,9 +297,18 @@ class Trainer:
         interval_steps = torch.tensor(0, device=self.fabric.device)
         interval_inf_or_nan_count = torch.tensor(0, device=self.fabric.device)
 
+        if self.should_compute_learning_dynamics:
+            # Store all sub-batches that make up a full gradient step
+            gradient_step_data = {"input_ids": []}
+
         # Training loop
-        for batch_idx, batch in enumerate(
-            self.train_iterator, start=self.train_start_step
+        train_start_sub_batch_step = (
+            gradient_step
+            * self.configs["training"].optimization.gradient_accumulation_steps
+        )
+
+        for sub_batch_idx, sub_batch in enumerate(
+            self.train_iterator, start=train_start_sub_batch_step
         ):
             ########################################################
             #
@@ -289,9 +316,12 @@ class Trainer:
             #
             ########################################################
 
-            _input_ids = torch.tensor(batch["input_ids"], device=self.fabric.device)
+            _input_ids = torch.tensor(sub_batch["input_ids"], device=self.fabric.device)
             input_ids = _input_ids[:, :-1]
             labels = _input_ids[:, 1:]
+
+            if self.should_compute_learning_dynamics:
+                gradient_step_data["input_ids"].extend(sub_batch["input_ids"])
 
             # Forward pass
             model_output, _ = self.model(input_ids)
@@ -303,7 +333,7 @@ class Trainer:
             #
             ########################################################
 
-            should_accumulate_gradients = (batch_idx + 1) % self.configs[
+            should_accumulate_gradients = (sub_batch_idx + 1) % self.configs[
                 "training"
             ].optimization.gradient_accumulation_steps != 0
 
@@ -348,15 +378,20 @@ class Trainer:
             # Learning Dynamics Checkpointing
             #
             ########################################################
+            if gradient_step % self.configs["checkpointing"].save_every_n_steps == 0:
+                if self.should_compute_learning_dynamics:
+                    gradient_step_dataset = Dataset.from_dict(gradient_step_data)
+                    compute_learning_dynamics_states(
+                        self.configs["checkpointing"],
+                        self.fabric,
+                        self.model,
+                        gradient_step_dataset,
+                        compute_gradients=True,
+                    )
 
-            # if self.configs["checkpointing"].learning_dynamics.enabled:
-            #     # compute_learning_dynamics_metrics(
-            #     #     self.training_config.checkpointing.learning_dynamics,
-            #     #     self.fabric,
-            #     #     self.model,
-            #     #     batch,
-            #     # )
-            #     pass
+                    gradient_step_data = {"input_ids": []}
+
+                exit()
 
             ########################################################
             #
