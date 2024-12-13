@@ -428,7 +428,11 @@ class PicoBlock(nn.Module):
 
 
 class Pico(nn.Module):
-    """Core Pico implementation."""
+    """
+    Core Pico model: combines the embedding, Pico layers, and output projection into a single model.
+
+    For more information on the model, see the classes for the modules that make up the model.
+    """
 
     def __init__(
         self,

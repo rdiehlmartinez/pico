@@ -293,7 +293,7 @@ def save_learning_dynamics_states(
                 │      ├── {prefix}_activations.pt
                 │      ├── {prefix}_weights.pt
                 │      └── {prefix}_gradients.pt
-                │      └── dataset.hf # if learning_dynamics_dataset is provided
+                │      └── {prefix}_data/ # if learning_dynamics_dataset is provided
                 └── latest -> step_{gradient_step}/
 
     Args:
@@ -342,7 +342,10 @@ def save_learning_dynamics_states(
 
             learning_dynamics_dataset = Dataset.from_dict(detokenized_dataset)
 
-        learning_dynamics_dataset.save_to_disk(learning_dynamics_path)
+        learning_dynamics_dataset_path = os.path.join(
+            learning_dynamics_path, f"{prefix}_data"
+        )
+        learning_dynamics_dataset.save_to_disk(learning_dynamics_dataset_path)
 
     if checkpointing_config.save_checkpoint_repo_id is not None:
         # Upload the HF model

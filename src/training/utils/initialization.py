@@ -457,8 +457,11 @@ def initialize_logging(
                 path="pico-lm/pico",
                 filters={"display_name": checkpointing_config.run_name},
             )
-            if len(previous_runs) == 1:
-                _run_id = previous_runs[0].id
+            try:
+                if len(previous_runs) == 1:
+                    _run_id = previous_runs[0].id
+            except ValueError:
+                pass
 
         experiment_tracker = WandbLogger(
             project=logging_config.wandb_project,
