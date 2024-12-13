@@ -5,9 +5,9 @@ Constants used throughout the codebase
 # Basic Training Constants used throughout the codebase
 VOCAB_SIZE = 50304
 MAX_SEQ_LEN = 2048
-BATCH_SIZE = 2
+BATCH_SIZE = 1024
 # NOTE: If you need to make the batch size fit in memory, you can play with this.
-GRADIENT_ACCUMULATION_STEPS = 1
+GRADIENT_ACCUMULATION_STEPS = 128
 
 # Directories used to store training runs, checkpoints, logs, and evaluation results
 RUNS_DIR = "runs"

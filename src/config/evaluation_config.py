@@ -7,13 +7,13 @@ Specifies the hyperparameters for the evaluation process, i.e. what metrics to c
 from dataclasses import dataclass, field
 from typing import Optional, List
 
-from src.config._constants import MAX_SEQ_LEN
+from src.config._constants import MAX_SEQ_LEN, BATCH_SIZE, GRADIENT_ACCUMULATION_STEPS
 
 
 @dataclass
 class PalomaEvaluationConfig:
     max_length: int = MAX_SEQ_LEN
-    batch_size: int = 16
+    batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
 
 
 @dataclass

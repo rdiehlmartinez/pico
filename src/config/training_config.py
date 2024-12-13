@@ -38,4 +38,4 @@ class TrainingConfig:
     fabric: FabricConfig = field(default_factory=FabricConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
     strategy: str = "deepspeed"
-    max_steps: int = 100
+    max_steps: int = 200_000

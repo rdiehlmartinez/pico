@@ -14,4 +14,4 @@ class LoggingConfig:
     wandb_project: Optional[str] = "pico"
     wandb_entity: Optional[str] = "pico-lm"
 
-    log_every_n_steps: int = 10
+    log_every_n_steps: int = 100

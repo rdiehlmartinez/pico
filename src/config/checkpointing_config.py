@@ -66,7 +66,7 @@ class CheckpointingConfig:
     fabric_checkpoint_dir: str = FABRIC_CHECKPOINT_DIR
     learning_dynamics_dir: str = LEARNING_DYNAMICS_DIR
     # How often to save checkpoints
-    save_every_n_steps: int = 20
+    save_every_n_steps: int = 5000
 
     # Should be in the format of <(username or )>/<repo_name>, e.g. pico-lm/pico-7b
     save_checkpoint_repo_id: Optional[str] = "pico-lm/demo"
