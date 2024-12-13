@@ -136,8 +136,9 @@ class RoPE(nn.Module):
 
     @classmethod
     def _setup_freqs_cis(cls, seq_len: int, theta: float, dim: int) -> torch.Tensor:
-        """
-        Sets up the complex frequency tensor that is used to compute the RoPE embeddings.
+        """Setup Frequency Tensor for RoPE Embeddings
+
+        Initializes the complex frequency tensor that is used to compute the RoPE embeddings.
 
         Note other implementations will use cos and sin directly, but using the complex
         number representation is (probably?) more efficient:
@@ -152,8 +153,9 @@ class RoPE(nn.Module):
     def get_freqs_cis(
         self, input_shape: torch.Size, start_pos: int, end_pos: int
     ) -> torch.Tensor:
-        """
-        Reshapes the frequency tensor to be broadcastable with the input tensor.
+        """Reshape Frequency Tensor for RoPE Embeddings
+
+        Makes the frequency tensor broadcastable with the input tensor.
         """
         _freqs_cis = RoPE._freqs_cis[start_pos:end_pos]
         ndim = len(input_shape)
@@ -170,7 +172,8 @@ class RoPE(nn.Module):
         keys: torch.Tensor,
         start_pos: Optional[int] = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
-        """
+        """Apply RoPE Embeddings to Queries and Keys
+
         Applies the rotary positional embeddings to the input tensors via complex num multiplication
 
         NOTE: The start_pos is used if we want to use the kv_cache in the attention mechanism.
@@ -262,6 +265,21 @@ class Attention(nn.Module):
         past_key_values: Optional[Tuple[torch.Tensor]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
+        """Forward pass for the attention mechanism.
+
+        Computes queries, keys, and values for the attention mechanism. Applies rotary positional
+        embeddings to the queries and keys, and then computes attention scores and outputs.
+
+        For an introduction to the attention mechanism, see:
+        https://arxiv.org/abs/1706.03762
+
+        A few things to note:
+        - The past_key_values is used to implement the KV cache, which is used to speed up
+          generation by caching the KV pairs from previous forward passes. This is useful when doing
+          tasks that require generating multiple tokens conditioned on previous tokens (e.g. language
+          modeling, text generation, etc.). The way the KV cache is implemented is that each layer has
+          its own KV cache - this KV cache is implemented as a tuple.
+        """
         bsz, seq_len, _ = input.shape
         _queries, _keys, _values = (
             self.q_proj(input),
@@ -460,7 +478,8 @@ class Pico(nn.Module):
         generation by caching the KV pairs from previous forward passes. This is useful when doing
         tasks that require generating multiple tokens conditioned on previous tokens (e.g. language
         modeling, text generation, etc.). The way the KV cache is implemented is that each layer has
-        its own KV cache, and we aggregate the KV pairs from each layer in a tuple.
+        its own KV cache which is stored as a tuple. The whole model then stores a tuple of these
+        KV caches (so a tuple of tuples).
         """
 
         seq_len = input_ids.shape[-1]
@@ -582,6 +601,11 @@ class PicoHF(PreTrainedModel):
         use_cache: bool = False,
         **kwargs,
     ) -> Union[CausalLMOutput, CausalLMOutputWithPast]:
+        """HuggingFace forward pass wrapper.
+
+        Forwards pass for the HuggingFace version of the Pico Model. Basic wrapper around the
+        Pico model's forward pass, and returns the output as a HuggingFace CausalLMOutput.
+        """
         logits, past_key_values = self.pico(input_ids, past_key_values, use_cache)
         if use_cache:
             return CausalLMOutputWithPast(

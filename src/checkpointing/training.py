@@ -29,8 +29,7 @@ def load_checkpoint(
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
 ):
-    """
-    Load model checkpoint and associated states from disk or latest checkpoint.
+    """Load model checkpoint and associated states from disk or latest checkpoint.
 
     Args:
         checkpointing_config: Configuration object containing checkpoint settings
@@ -99,8 +98,7 @@ def save_checkpoint(
     gradient_step: int,
     upload_logs: bool = True,
 ):
-    """
-    Save training checkpoint and associated states to disk and optionally to HuggingFace Hub.
+    """Save training checkpoint and associated states to disk and optionally to HuggingFace Hub.
 
     We save the following files:
     - HuggingFace model files (config.json, pytorch_model.bin)

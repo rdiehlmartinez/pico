@@ -38,8 +38,9 @@ def run_paloma_evaluation(
     model_path: str,
     paloma_config: PalomaEvaluationConfig,
 ) -> None:
-    """Run Perplexity evaluation on the Paloma evaluation dataset. We use the HuggingFace
-    evaluate library to load in and compute the perplexity metric.
+    """Run Perplexity evaluation on the Paloma evaluation dataset.
+
+    We use the HuggingFace evaluate library to load in and compute the perplexity metric.
 
     Args:
         model_path (str): Path to the model checkpoint to be evaluated

@@ -43,7 +43,7 @@ Unlike other model suites, Pico is specifically designed for learning dynamics r
 
 - **Simple Architecture**: Clean, modular implementation of core transformer components
 - **Educational Focus**: Well-documented code with clear references to academic papers
-- **Research Ready**: Built-in tools for analyzing model learning dynamics
+- **Research Ready**: Built-in tools for storing and studying model learning dynamics
 - **Efficient Training**: Pre-tokenized dataset and optimized training loop
 - **Modern Stack**: Built with PyTorch Lightning, Wandb, and HuggingFace integrations
 
@@ -92,6 +92,12 @@ The core implementation is organized into these key files and packages:
   - Hyperparameter definitions
   - Model architecture settings
   - Training parameters
+
+- **`src/checkpointing`**: Checkpointing and State Management
+  - Training state persistence (model, optimizer, scheduler)
+  - Learning dynamics tracking (activations, weights, gradients)
+  - Evaluation results storage
+  - Automatically store huggingface-compatible version of model for down-stream use 
 
 ### Common Starting Points
 
@@ -143,7 +149,7 @@ Apache 2.0 License
 - GitHub: [rdiehlmartinez/pico](https://github.com/rdiehlmartinez/pico)
 - Author: [Richard Diehl Martinez](https://richarddiehlmartinez.com)
 
-## 🔍 Citation
+## ���� Citation
 
 If you use Pico in your research, please cite:
 

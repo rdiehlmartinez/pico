@@ -1,5 +1,7 @@
 """
 Utilities for checkpointing learning dynamics-related states (i.e. activations, weights, grads, etc.)
+
+We save the learning dynamics states in a subdirectory of the checkpointing directory.
 """
 
 import os
@@ -38,30 +40,36 @@ class CheckpointStateExtractor:
         self.fabric = fabric
         self.model = model
 
-    @staticmethod
-    def _cleanup_hidden_states(checkpoint_activations, batch_index):
-        """
-        Cleans up the hidden states if we run out of memory during the forward pass. We want
-        to ensure that the hidden states are the same size as the batch index. In practice,
-        the activations at a given layer might be more than batch_index because at that layer
-        we did not run out of memory (only later).
-        """
-        for layer_name, activations in checkpoint_activations.items():
-            if activations.shape[0] > batch_index:
-                checkpoint_activations[layer_name] = activations[:batch_index]
-
     def extract_states(self, dataloader, compute_gradients: bool = False):
-        """
-        Perform a forward pass of the model on a given batch of data; assumes that the model
-        has hooks setup to save the hidden states at each layer.
+        """Extracts model states (activations, weights, and optionally gradients).
+
+        Given a dataloader, this function will perform a forward pass of the model on each batch,
+        and save the activations and weights at each layer. If compute_gradients is True, it will
+        also compute the gradients of the model parameters.
+
+        Args:
+            dataloader: The dataloader containing the dataset to extract states from.
+            compute_gradients: Whether to compute the gradients of the model parameters.
+
+        Returns:
+            A dictionary containing the activations, weights, and optionally gradients of the model.
         """
         checkpoint_activations = {}
         checkpoint_weights = {}
 
+        # NOTE: to extract activations and weights, we need to setup forward hooks on the layers
+        # of the model that we are interested in. This is a good intro to forward hooks if you
+        # are not familiar: https://web.stanford.edu/~nanbhas/blog/forward-hooks-pytorch/
         forward_hooks = self._setup_forward_hooks(
             checkpoint_activations,
             checkpoint_weights,
         )
+
+        ########################################################
+        #
+        # Forward Pass: Extract activations and weights; and compute gradients
+        #
+        ########################################################
 
         for sub_batch in dataloader:
             _input_ids = torch.tensor(sub_batch["input_ids"], device=self.fabric.device)
@@ -84,18 +92,24 @@ class CheckpointStateExtractor:
                 with torch.no_grad():
                     _ = self.model(input_ids)
             else:
+                # NOTE: if we are computing gradients, calling backwards will compute the gradients
+                # of the model parameters.
                 outputs, _ = self.model(input_ids)
                 outputs = outputs.transpose(1, 2)
                 loss = F.cross_entropy(outputs, labels)
                 self.fabric.backward(loss)
 
-        # cleanup forward hooks
+        # cleanup forward hooks - NOTE this is not strictly necessary, since self.model is a
+        # deepcopy of the original model; but it is good practice to remove the hooks after the
+        # forward pass is complete.
         for hook in forward_hooks:
             hook.remove()
 
-        # -----------------------------------------------------
+        ########################################################
+        #
         # Extract gradients from the target tensors of the model
-        # -----------------------------------------------------
+        #
+        ########################################################
 
         layer_suffixes = self.learning_dynamics_config.layer_suffixes
         checkpoint_gradients = {}
@@ -124,9 +138,21 @@ class CheckpointStateExtractor:
     ########################################################
 
     def _setup_forward_hooks(self, checkpoint_activations, checkpoint_weights):
+        """Setup forward hooks for the model to save activations and weights at each layer.
+
+        This function will setup forward hooks on the layers of the model that we are interested in.
+        The forward hooks will save the activations and weights at each layer whenever the forward pass
+        is performed.
+
+        Args:
+            checkpoint_activations: A dictionary to store the activations at each layer.
+            checkpoint_weights: A dictionary to store the weights at each layer.
+
+        Returns:
+            A list of forward hooks. We do this so that we can remove the hooks after the forward pass
+            is complete.
         """
-        Setup forward hooks for the model to save activations and weights at each layer.
-        """
+
         forward_hooks = []
         layer_suffixes = self.learning_dynamics_config.layer_suffixes
 
@@ -143,6 +169,21 @@ class CheckpointStateExtractor:
     def _get_forward_hook(
         self, module_name, checkpoint_activations, checkpoint_weights
     ):
+        """Get a forward hook for a given module.
+
+        This function is called by the _setup_forward_hooks function to setup a forward hook for a given
+        module. This functions is a closure that captures the module_name, checkpoint_activations, and
+        checkpoint_weights.
+
+        Args:
+            module_name: The name of the module to setup a forward hook for.
+            checkpoint_activations: A dictionary to store the activations at each layer.
+            checkpoint_weights: A dictionary to store the weights at each layer.
+
+        Returns:
+            A forward hook for the given module.
+        """
+
         def _forward_hook(module, _, module_out):
             sequence_idx = self.learning_dynamics_config.sequence_idx
             activations = module_out[:, sequence_idx, :].detach().cpu()
@@ -171,8 +212,20 @@ def compute_learning_dynamics_states(
     dataset: Dataset,
     compute_gradients: bool = False,
 ) -> Dict[str, torch.Tensor]:
-    """
-    Compute the learning dynamics metrics for a given checkpoint step.
+    """Computes the learning dynamics metrics for a given checkpoint step.
+
+    Uses the CheckpointStateExtractor to extract the activations, weights, and optionally gradients
+    of the model at a given checkpoint step.
+
+    Args:
+        checkpointing_config: The configuration object for checkpointing.
+        fabric: The Fabric instance for distributed training.
+        model: The model to extract states from.
+        dataset: The dataset to extract states from.
+        compute_gradients: Whether to compute the gradients of the model parameters.
+
+    Returns:
+        A dictionary containing the activations, weights, and optionally gradients of the model.
     """
 
     if fabric.global_rank != 0:
@@ -221,8 +274,7 @@ def save_learning_dynamics_states(
     learning_dynamics_dataset: Optional[Dataset] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
 ):
-    """
-    Save the learning dynamics metrics to the checkpointing directory.
+    """Save the learning dynamics metrics to the checkpointing directory.
 
     By default only the learning dynamics states are saved. If the learning dynamics dataset
     is provided, it is also saved; if a tokenizer is provided, the dataset is also detokenized
@@ -272,7 +324,10 @@ def save_learning_dynamics_states(
 
     # save the learning dynamics states
     for key, value in learning_dynamics_states.items():
-        torch.save(value, os.path.join(learning_dynamics_path, f"{prefix}_{key}.pt"))
+        if value is not None and len(value) > 0:
+            torch.save(
+                value, os.path.join(learning_dynamics_path, f"{prefix}_{key}.pt")
+            )
 
     if learning_dynamics_dataset is not None:
         if tokenizer is not None:

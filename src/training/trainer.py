@@ -11,7 +11,6 @@ pipeline with the features:
     - Evaluation: Periodic model evaluation on validation datasets
     - Logging: Comprehensive metric tracking and experiment monitoring
     - Optimization: Support for gradient accumulation, clipping, and LR scheduling
-
 """
 
 import logging
@@ -65,10 +64,16 @@ class Trainer:
             config_path (str): Path to the YAML configuration file containing any overrides.
         """
 
+        ########################################################
+        #
+        # Basic Initialization of Configs, Data, Model, Optimizer, etc.
+        #
+        ########################################################
+
         # Setup Config
         self.configs = initialize_configuration(config_path)
 
-        # Setup Run Directory
+        # Setup Run Directory (i.e. where we store checkpoints, logs, etc.)
         initialize_run_dir(self.configs["checkpointing"])
 
         # Setup Logger
@@ -110,6 +115,12 @@ class Trainer:
         )
         self.should_start_from_scratch = not self.should_load_checkpoint
 
+        ########################################################
+        #
+        # Boilerplate to deal with loading/resuming from checkpoints
+        #
+        ########################################################
+
         # Possibly load a checkpoint
         if self.should_load_checkpoint:
             resume_checkpoint = load_checkpoint(
@@ -137,7 +148,10 @@ class Trainer:
                     self.train_start_gradient_step,
                 ) = resume_checkpoint
 
-                # NOTE: need to fast-forward to the start step
+                # NOTE: This is important!! We need to fast-forward the iterator to the correct
+                # sub-batch; this is used to determine what sub-batch we should start from so that
+                # when we resume training, we continue from the correct batch of data we would have
+                # seen had training not previously stopped.
                 train_iterator = iter(self.train_dataloader)
                 sub_batch_step = (
                     self.train_start_gradient_step
@@ -147,10 +161,15 @@ class Trainer:
                     next(train_iterator)
                 self.train_iterator = train_iterator
 
-        # Setup Training Start Step and Iterator
         if self.should_start_from_scratch:
             self.train_start_gradient_step = 0
             self.train_iterator = iter(self.train_dataloader)
+
+        ########################################################
+        #
+        # Helper flags used during training for checkpointing and evaluation
+        #
+        ########################################################
 
         # Helper flag to determine if we should evaluate the model
         self.should_evaluate = (
@@ -190,6 +209,12 @@ class Trainer:
         Returns:
             None
         """
+
+        ########################################################
+        #
+        # Initial Checkpointing and Evaluation
+        #
+        ########################################################
 
         # Save Initial Checkpoint; NOTE: if the checkpoint already exists, this performs a no-op
         save_checkpoint(
@@ -242,11 +267,23 @@ class Trainer:
                         self.train_start_gradient_step,
                     )
 
+        ########################################################
+        #
+        # Main Training Loop (see `_training_loop` for details)
+        #
+        ########################################################
+
         if self.train_start_gradient_step < self.configs["training"].max_steps:
             self.log(f"✨ Starting training from step {self.train_start_gradient_step}")
             final_step = self._training_loop()
         else:
             final_step = self.train_start_gradient_step
+
+        ########################################################
+        #
+        # Final Checkpointing and Evaluation
+        #
+        ########################################################
 
         # Save Learning Dynamics States
         if self.should_compute_learning_dynamics:
@@ -310,6 +347,7 @@ class Trainer:
             - Gradient accumulation
             - Gradient clipping
             - Periodic model evaluation and checkpointing
+            - Learning Dynamics Checkpointing
             - Learning rate scheduling
             - Logging of training metrics including loss and learning rate
             - Handling of infinite/NaN losses
@@ -331,7 +369,9 @@ class Trainer:
             # Store all sub-batches that make up a full gradient step
             gradient_step_data = {"input_ids": []}
 
-        # Training loop
+        # NOTE: determine what sub-batch we should start from; Depending on if we are using a
+        # gradient accumulation step, the gradient_step and train_start_sub_batch_step will be
+        # different.
         train_start_sub_batch_step = (
             gradient_step
             * self.configs["training"].optimization.gradient_accumulation_steps
@@ -499,6 +539,12 @@ class Trainer:
                 break
 
         return gradient_step
+
+    ########################################################
+    #
+    # Trainer Logging Functinalities
+    #
+    ########################################################
 
     def _log_training_metrics(
         self,
