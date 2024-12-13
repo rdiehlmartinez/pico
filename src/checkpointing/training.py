@@ -42,16 +42,12 @@ def load_checkpoint(
         lr_scheduler: The learning rate scheduler to load states into
 
     Returns:
-        If train_dataloader is provided:
-            (model, optimizer, lr_scheduler, step, train_iterator)
-        Otherwise:
-            (model, optimizer, lr_scheduler, step)
+        (model, optimizer, lr_scheduler, step)
         Returns None if no checkpoint is found.
-
-    Raises:
-        ValueError: If no checkpoint path is specified in config
     """
 
+    # NOTE: if both load_checkpoint_path and load_latest_checkpoint are set, we prioritize
+    # load_checkpoint_path
     if checkpointing_config.training.load_checkpoint_path:
         checkpoint_path = checkpointing_config.training.load_checkpoint_path
     elif checkpointing_config.training.load_latest_checkpoint:
@@ -145,12 +141,9 @@ def save_checkpoint(
         gradient_step: Current training gradient step (i.e. number of learning steps taken)
         upload_logs: Whether to upload training logs to HF Hub (default: True)
 
-    Notes:
-        - Only rank 0 process saves checkpoints in distributed training
-        - Checkpoints are saved under: {checkpointing_config.runs_dir}/{checkpointing_config.run_name}/{checkpointing_config.checkpoints_dir}/step_{step}
-        - Existing checkpoints are not overwritten
-        - HuggingFace Hub uploads are incremental (only new files are uploaded)
     """
+
+    # Only rank 0 process saves checkpoints in distributed training
     if fabric.global_rank != 0:
         fabric.barrier()
         return
@@ -168,7 +161,6 @@ def save_checkpoint(
     checkpoint_path = os.path.join(root_checkpoint_path, f"step_{gradient_step}")
 
     # Create directories
-    os.makedirs(root_checkpoint_path, exist_ok=True)
     os.makedirs(checkpoint_path, exist_ok=True)
 
     ########################################################

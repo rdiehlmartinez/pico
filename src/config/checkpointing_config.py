@@ -15,6 +15,7 @@ from ._constants import (
     FABRIC_CHECKPOINT_DIR,
     EVAL_RESULTS_DIR,
     MAX_SEQ_LEN,
+    LEARNING_DYNAMICS_DIR,
     BATCH_SIZE,
     GRADIENT_ACCUMULATION_STEPS,
 )
@@ -63,7 +64,7 @@ class CheckpointingConfig:
     checkpoints_dir: str = CHECKPOINTS_DIR
     logs_dir: str = LOGS_DIR
     fabric_checkpoint_dir: str = FABRIC_CHECKPOINT_DIR
-
+    learning_dynamics_dir: str = LEARNING_DYNAMICS_DIR
     # How often to save checkpoints
     save_every_n_steps: int = 20
 

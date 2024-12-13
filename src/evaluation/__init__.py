@@ -66,6 +66,9 @@ def run_evaluation(
     """
 
     if fabric.global_rank != 0:
+        # NOTE: by default we only want to run evaluation on a single process; evaluation tasks
+        # will typically be run using third-party libraries. These libraries should be in charge of
+        # handling the distributed evaluation.
         fabric.barrier()
         return
 

@@ -13,4 +13,5 @@ from .training import load_checkpoint, save_checkpoint
 from .evaluation import save_evaluation_results
 from .learning_dynamics import (
     compute_learning_dynamics_states,
+    save_learning_dynamics_states,
 )

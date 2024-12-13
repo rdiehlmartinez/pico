@@ -21,8 +21,7 @@ import torch.nn.functional as F
 import os
 from lightning.fabric.utilities.rank_zero import rank_zero_only
 
-from torch.utils.data import Dataset
-
+from datasets import Dataset, load_dataset
 from typing import Dict, Any
 
 from src.model import Pico
@@ -44,6 +43,7 @@ from src.checkpointing import (
     save_checkpoint,
     save_evaluation_results,
     compute_learning_dynamics_states,
+    save_learning_dynamics_states,
 )
 
 from src.evaluation import run_evaluation
@@ -83,10 +83,10 @@ class Trainer:
 
         # Setup Dataset, Tokenizer, and Dataloader
         self.train_dataset = initialize_dataset(self.configs["data"])
-        self.tokenizer = initialize_tokenizer(self.configs["data"])
         self.train_dataloader = initialize_dataloader(
             self.configs["data"], self.train_dataset
         )
+        self.tokenizer = initialize_tokenizer(self.configs["data"])
 
         # Setup Model, Optimizer, and Dataloaders
         self.model = Pico(self.configs["model"], self.fabric)
@@ -118,7 +118,6 @@ class Trainer:
                 self.model,
                 self.optimizer,
                 self.lr_scheduler,
-                self.train_dataloader,
             )
 
             if resume_checkpoint is None:
@@ -163,6 +162,18 @@ class Trainer:
             self.configs["checkpointing"].learning_dynamics.layer_suffixes is not None
             and len(self.configs["checkpointing"].learning_dynamics.layer_suffixes) > 0
         )
+
+        if self.should_compute_learning_dynamics:
+            if (
+                self.configs["checkpointing"].learning_dynamics.eval_data_batch
+                is not None
+            ):
+                self.learning_dynamics_eval_dataset = load_dataset(
+                    self.configs["checkpointing"].learning_dynamics.eval_data_batch,
+                    split="val",
+                )
+            else:
+                self.learning_dynamics_eval_dataset = None
 
     def train(self) -> None:
         """Execute the main training workflow.
@@ -236,6 +247,25 @@ class Trainer:
             final_step = self._training_loop()
         else:
             final_step = self.train_start_gradient_step
+
+        # Save Learning Dynamics States
+        if self.should_compute_learning_dynamics:
+            if self.learning_dynamics_eval_dataset is not None:
+                self.log(f"Step {final_step} -- 📈 Saving Learning Dynamics")
+                learning_dynamics_val_states = compute_learning_dynamics_states(
+                    self.configs["checkpointing"],
+                    self.fabric,
+                    self.model,
+                    self.learning_dynamics_eval_dataset,
+                    compute_gradients=False,
+                )
+                save_learning_dynamics_states(
+                    self.configs["checkpointing"],
+                    self.fabric,
+                    learning_dynamics_val_states,
+                    final_step,
+                    prefix="val",
+                )
 
         # Handle checkpointing and final evaluation
         if final_step % self.configs["checkpointing"].save_every_n_steps != 0:
@@ -380,18 +410,39 @@ class Trainer:
             ########################################################
             if gradient_step % self.configs["checkpointing"].save_every_n_steps == 0:
                 if self.should_compute_learning_dynamics:
+                    self.log(f"Step {gradient_step} -- 📈 Saving Learning Dynamics")
                     gradient_step_dataset = Dataset.from_dict(gradient_step_data)
-                    compute_learning_dynamics_states(
+                    learning_dynamics_train_states = compute_learning_dynamics_states(
                         self.configs["checkpointing"],
                         self.fabric,
                         self.model,
                         gradient_step_dataset,
                         compute_gradients=True,
                     )
-
-                    gradient_step_data = {"input_ids": []}
-
-                exit()
+                    save_learning_dynamics_states(
+                        self.configs["checkpointing"],
+                        self.fabric,
+                        learning_dynamics_train_states,
+                        gradient_step,
+                        prefix="train",
+                        learning_dynamics_dataset=gradient_step_dataset,
+                        tokenizer=self.tokenizer,
+                    )
+                    if self.learning_dynamics_eval_dataset is not None:
+                        learning_dynamics_val_states = compute_learning_dynamics_states(
+                            self.configs["checkpointing"],
+                            self.fabric,
+                            self.model,
+                            self.learning_dynamics_eval_dataset,
+                            compute_gradients=False,
+                        )
+                        save_learning_dynamics_states(
+                            self.configs["checkpointing"],
+                            self.fabric,
+                            learning_dynamics_val_states,
+                            gradient_step,
+                            prefix="val",
+                        )
 
             ########################################################
             #

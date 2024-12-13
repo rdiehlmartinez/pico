@@ -2,18 +2,21 @@
 Utilities for checkpointing learning dynamics-related states (i.e. activations, weights, grads, etc.)
 """
 
-import torch
-import gc
+import os
 import re
 import copy
+import torch
 
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
+from huggingface_hub import upload_folder
+
 # typing imports
 import torch.nn as nn
-from torch.utils.data import Dataset
-from typing import Dict
+from typing import Dict, Optional
+from datasets import Dataset
+from transformers import PreTrainedTokenizerBase
 from src.config import CheckpointingConfig
 from src.config.checkpointing_config import LearningDynamicsCheckpointingConfig
 from lightning.fabric import Fabric
@@ -55,79 +58,36 @@ class CheckpointStateExtractor:
         checkpoint_activations = {}
         checkpoint_weights = {}
 
-        batch = None
-
         forward_hooks = self._setup_forward_hooks(
             checkpoint_activations,
             checkpoint_weights,
         )
 
-        if compute_gradients:
-            if "labels" in batch:
-                input_ids = batch["input_ids"]
-                labels = batch["labels"]
-            else:
-                # NOTE: labels are the input ids shifted over by one
-                input_ids = batch["input_ids"][:, :-1]
-                labels = batch["input_ids"][:, 1:]
-        else:
-            input_ids = batch["input_ids"]
-            labels = None
+        for sub_batch in dataloader:
+            _input_ids = torch.tensor(sub_batch["input_ids"], device=self.fabric.device)
 
-        batch_index = 0
-        full_batch_size = input_ids.shape[0]
-
-        sub_batch_size = 1
-        max_sub_batch_size = None
-
-        # -----------------------------------------------------
-        # Extract activations and weights through hooks
-        # -----------------------------------------------------
-
-        while batch_index < full_batch_size:
-            print(f"batch_index: {batch_index}, full_batch_size: {full_batch_size}")
-            try:
-                if max_sub_batch_size is not None:
-                    sub_batch_size = max_sub_batch_size
-
-                batch_end_index = min(batch_index + sub_batch_size, full_batch_size)
-                _inputs = input_ids[batch_index:batch_end_index]
-
-                if labels is not None:
-                    # NOTE: If labels are present, then we are iterating over the gradient batches
-                    _labels = labels[batch_index:batch_end_index]
-
-                if _labels is None:
-                    # we can throw away the outputs, we are only interested in the hidden states
-                    with torch.no_grad():
-                        _ = self.model(_inputs)
+            if compute_gradients:
+                if "labels" in sub_batch:
+                    input_ids = _input_ids
+                    labels = torch.tensor(
+                        sub_batch["labels"], device=self.fabric.device
+                    )
                 else:
-                    outputs, _ = self.model(_inputs)
-                    outputs = outputs.transpose(1, 2)
-                    loss = F.cross_entropy(outputs, _labels)
-                    self.fabric.backward(loss)
+                    input_ids = _input_ids[:, :-1]
+                    labels = _input_ids[:, 1:]
+            else:
+                input_ids = _input_ids
+                labels = None
 
-            except RuntimeError as e:
-                # NOTE: Exception is thrown when the batch size is too large for the GPU
-                print(f"RuntimeError: {e}")
-
-                if sub_batch_size == 1:
-                    raise Exception("Batch size of 1 is too large for the GPU")
-
-                sub_batch_size //= 2
-                max_sub_batch_size = sub_batch_size
-
-                gc.collect()
-                torch.cuda.empty_cache()
-
-                self._cleanup_hidden_states(checkpoint_activations, batch_index)
-
-                continue
-
-            batch_index = batch_end_index
-
-            if max_sub_batch_size is None:
-                sub_batch_size *= 2
+            if labels is None:
+                # we can throw away the outputs, we are only interested in the hidden states
+                with torch.no_grad():
+                    _ = self.model(input_ids)
+            else:
+                outputs, _ = self.model(input_ids)
+                outputs = outputs.transpose(1, 2)
+                loss = F.cross_entropy(outputs, labels)
+                self.fabric.backward(loss)
 
         # cleanup forward hooks
         for hook in forward_hooks:
@@ -219,6 +179,7 @@ def compute_learning_dynamics_states(
         fabric.barrier()
         return
 
+    # Setting up datalaoder for
     def _collate_fn(batch):
         return {"input_ids": [entry["input_ids"] for entry in batch]}
 
@@ -251,6 +212,92 @@ def compute_learning_dynamics_states(
     }
 
 
-def save_learning_dynamics_metrics():
-    """ """
-    pass
+def save_learning_dynamics_states(
+    checkpointing_config: CheckpointingConfig,
+    fabric: Fabric,
+    learning_dynamics_states: Dict[str, torch.Tensor],
+    gradient_step: int,
+    prefix: str = "train",
+    learning_dynamics_dataset: Optional[Dataset] = None,
+    tokenizer: Optional[PreTrainedTokenizerBase] = None,
+):
+    """
+    Save the learning dynamics metrics to the checkpointing directory.
+
+    By default only the learning dynamics states are saved. If the learning dynamics dataset
+    is provided, it is also saved; if a tokenizer is provided, the dataset is also detokenized
+    (i.e. a new column with the text is added to the dataset).
+
+    The learning dynamics dataset is saved in the checkpointing directory as a HuggingFace
+    dataset.
+
+    Creates a versioned checkpoint directory with the following structure:
+
+    {checkpointing_config.runs_dir}/
+        └── {checkpointing_config.run_name}/
+            └── {checkpointing_config.checkpoints_dir}/
+                ├── step_{gradient_step}/
+                │   └── {checkpointing_config.learning_dynamics_dir}/ # Learning Dynamics files
+                │      ├── {prefix}_activations.pt
+                │      ├── {prefix}_weights.pt
+                │      └── {prefix}_gradients.pt
+                │      └── dataset.hf # if learning_dynamics_dataset is provided
+                └── latest -> step_{gradient_step}/
+
+    Args:
+        checkpointing_config: The configuration object for checkpointing.
+        fabric: The Fabric instance for distributed training.
+        learning_dynamics_states: The learning dynamics states to save.
+        gradient_step: The gradient step at which the learning dynamics states were computed.
+        learning_dynamics_dataset: The dataset containing learning dynamics data,
+            including input IDs that need to be decoded.
+        tokenizer: The tokenizer used to decode input IDs into text.
+    """
+
+    # Only rank 0 process saves checkpoints in distributed training
+    if fabric.global_rank != 0:
+        fabric.barrier()
+        return
+
+    runs_dir = checkpointing_config.runs_dir
+    run_name = checkpointing_config.run_name
+    checkpoints_dir = checkpointing_config.checkpoints_dir
+    learning_dynamics_dir = checkpointing_config.learning_dynamics_dir
+
+    run_path = os.path.join(runs_dir, run_name)
+    root_checkpoint_path = os.path.join(run_path, checkpoints_dir)
+    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{gradient_step}")
+    learning_dynamics_path = os.path.join(checkpoint_path, learning_dynamics_dir)
+    os.makedirs(learning_dynamics_path, exist_ok=True)
+
+    # save the learning dynamics states
+    for key, value in learning_dynamics_states.items():
+        torch.save(value, os.path.join(learning_dynamics_path, f"{prefix}_{key}.pt"))
+
+    if learning_dynamics_dataset is not None:
+        if tokenizer is not None:
+            # go through dataset and decode the input ids; and add back into dataset
+            detokenized_dataset = {"input_ids": [], "text": []}
+
+            for entry in learning_dynamics_dataset:
+                input_ids = entry["input_ids"]
+                decoded_text = tokenizer.decode(input_ids, skip_special_tokens=True)
+                detokenized_dataset["input_ids"].append(input_ids)
+                detokenized_dataset["text"].append(decoded_text)
+
+            learning_dynamics_dataset = Dataset.from_dict(detokenized_dataset)
+
+        learning_dynamics_dataset.save_to_disk(learning_dynamics_path)
+
+    if checkpointing_config.save_checkpoint_repo_id is not None:
+        # Upload the HF model
+        upload_folder(
+            folder_path=learning_dynamics_path,
+            path_in_repo=learning_dynamics_dir,
+            repo_id=checkpointing_config.save_checkpoint_repo_id,
+            commit_message=f"Saving Learning Dynamics Datas -- Step {gradient_step}",
+            revision=checkpointing_config.run_name,
+            token=os.getenv("HF_TOKEN"),
+        )
+
+    fabric.barrier()
