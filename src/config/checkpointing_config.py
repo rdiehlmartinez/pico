@@ -52,6 +52,7 @@ class LearningDynamicsCheckpointingConfig:
     sub_batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
 
     # Path to the evaluation data batch - used across learning dynamics checkpointing for consistency
+    # NOTE: set to None to disable extracting learning dynamics states for an eval_batch
     eval_data_batch: Optional[str] = "pico-lm/pretokenized-paloma-tinsy"
 
 

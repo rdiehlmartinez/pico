@@ -111,8 +111,10 @@ model = AutoModelForCausalLM.from_pretrained("pico-lm/[...]")
 
 2. **Training Your Own Suite**
 ```bash
-# Edit config/train.yaml to customize your training
-poetry run train --config_path configs/train.yaml
+# Create a config yaml file, e.g. `my_config.yaml`
+# You can follow the provided demo template in configs/demo.yaml
+# If no config file is provided the default config values are used
+poetry run train --config_path my_config.yaml
 ```
 
 
