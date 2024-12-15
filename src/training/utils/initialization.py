@@ -417,7 +417,7 @@ def initialize_logging(
 
     # Create file handler
     log_file_path = _initialize_log_file(checkpointing_config)
-    file_handler = logging.FileHandler(log_file_path)
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
     file_handler.setLevel(logging.INFO)
 
     # Create formatter and add it to the handler
