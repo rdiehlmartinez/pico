@@ -15,30 +15,37 @@ libraries/frameworks.
 """
 
 import os
-from src.config import EvaluationConfig
-
 from .tasks.paloma import run_paloma_evaluation
 
+# typing imports
+from src.config import EvaluationConfig, CheckpointingConfig
+from lightning.fabric import Fabric
 
-def run_evaluation(evaluation_config: EvaluationConfig) -> None:
+
+def run_evaluation(
+    evaluation_config: EvaluationConfig,
+    checkpointing_config: CheckpointingConfig,
+    fabric: Fabric,
+) -> None:
     """Run model evaluation using specified metrics in `evaluation_config`.
 
     This function orchestrates the complete evaluation pipeline by:
-    1. Resolving the model checkpoint path (either specified or latest)
-    2. Running possible setup steps for the evaluation metric
-    3. Executing each requested evaluation metric (e.g. Paloma)
-    4. Aggregating results across all metrics
+    1. Resolving the model checkpoint path (either specified or latest) to load the model from;
+        during training, this is the path to the latest checkpoint in the run directory.
+    2. Iterating over each evaluation metric, and running the corresponding evaluation function.
+        NOTE: we suggest you follow the pattern of the Paloma evaluation function, and implement
+        your own evaluation function for each metric in the `evaluation/tasks` directory.
+    3. Aggregating results across all metrics in a dictionary, and returning it.
 
     Args:
         evaluation_config (EvaluationConfig): Configuration object containing:
-            - checkpoint_path (Optional[str]): Specific checkpoint to evaluate
-                If None, uses the latest checkpoint
-            - run_name (str): Name of the evaluation run
             - evaluation_metrics (List[str]): Metrics to evaluate; each metric should have its
                 own config. Currently supported: ["paloma"];
             - paloma (PalomaConfig): Configuration for Paloma evaluation
                 - max_length (int): Maximum sequence length
                 - limit_eval_examples (Optional[int]): Number of examples to evaluate
+        checkpointing_config (CheckpointingConfig): Configuration object containing:
+        fabric (Fabric): Lightning Fabric instance
 
     Returns:
         Dict[str, float]: Dictionary mapping metric names to their values
@@ -56,17 +63,20 @@ def run_evaluation(evaluation_config: EvaluationConfig) -> None:
             )
         )
 
-    Note:
-        The function automatically handles checkpoint resolution, directory
-        creation, and cleanup of temporary files. For each metric, it ensures
-        proper setup and teardown of evaluation environment.
     """
 
-    if evaluation_config.checkpoint_path is not None:
-        model_path = evaluation_config.checkpoint_path
+    if fabric.global_rank != 0:
+        # NOTE: by default we only want to run evaluation on a single process; evaluation tasks
+        # will typically be run using third-party libraries. These libraries should be in charge of
+        # handling the distributed evaluation.
+        fabric.barrier()
+        return
+
+    if checkpointing_config.evaluation.load_checkpoint_path is not None:
+        model_path = checkpointing_config.evaluation.load_checkpoint_path
     else:
-        run_name = evaluation_config.run_name
-        model_path = f"{os.getcwd()}/{evaluation_config.runs_dir}/{run_name}/{evaluation_config.checkpoints_dir}/latest"
+        run_name = checkpointing_config.run_name
+        model_path = f"{os.getcwd()}/{checkpointing_config.runs_dir}/{run_name}/{checkpointing_config.checkpoints_dir}/latest"
     os.makedirs(model_path, exist_ok=True)
 
     evaluation_results = {}
@@ -79,5 +89,7 @@ def run_evaluation(evaluation_config: EvaluationConfig) -> None:
             raise ValueError(f"Metric {metric} not supported")
 
         evaluation_results[metric] = paloma_result
+
+    fabric.barrier()
 
     return evaluation_results

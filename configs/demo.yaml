@@ -1,0 +1,36 @@
+# Demo config file 
+# You can follow this template to create your own config file
+# Refer to the config files in the configs/ directory to see all the available options
+
+checkpointing:
+  run_name: "demo"
+  save_every_n_steps: 10
+
+  save_checkpoint_repo_id: null # set to null to disable uploading checkpoints to HuggingFace Hub
+
+  training:
+    load_latest_checkpoint: true
+  
+  learning_dynamics:
+    layer_suffixes: ["attention.v_proj", "attention.o_proj", "feed_forward.w_2", "feed_forward.w_1"]
+
+data:
+  dataloader:
+    full_batch_size: 8
+    sub_batch_size: 8
+    max_seq_len: 10
+  
+logging:
+  experiment_tracker: null # set to null to disable experiment tracking
+
+  log_every_n_steps: 10
+
+training:
+  learning_rate: 0.001
+  max_steps: 100
+
+  optimization:
+    lr: 0.001
+    lr_warmup_steps: 10
+
+    gradient_accumulation_steps: 1
