@@ -43,7 +43,7 @@ Unlike other model suites, Pico is specifically designed for learning dynamics r
 
 - **Simple Architecture**: Clean, modular implementation of core transformer components
 - **Educational Focus**: Well-documented code with clear references to academic papers
-- **Research Ready**: Built-in tools for analyzing model learning dynamics
+- **Research Ready**: Built-in tools for storing and studying model learning dynamics
 - **Efficient Training**: Pre-tokenized dataset and optimized training loop
 - **Modern Stack**: Built with PyTorch Lightning, Wandb, and HuggingFace integrations
 
@@ -93,6 +93,12 @@ The core implementation is organized into these key files and packages:
   - Model architecture settings
   - Training parameters
 
+- **`src/checkpointing`**: Checkpointing and State Management
+  - Training state persistence (model, optimizer, scheduler)
+  - Learning dynamics tracking (activations, weights, gradients)
+  - Evaluation results storage
+  - Automatically store huggingface-compatible version of model for down-stream use 
+
 ### Common Starting Points
 
 1. **Using Pre-trained Models**
@@ -105,8 +111,10 @@ model = AutoModelForCausalLM.from_pretrained("pico-lm/[...]")
 
 2. **Training Your Own Suite**
 ```bash
-# Edit config/train.yaml to customize your training
-poetry run train --config_path configs/train.yaml
+# Create a config yaml file, e.g. `my_config.yaml`
+# You can follow the provided demo template in configs/demo.yaml
+# If no config file is provided the default config values are used
+poetry run train --config_path my_config.yaml
 ```
 
 
@@ -143,7 +151,7 @@ Apache 2.0 License
 - GitHub: [rdiehlmartinez/pico](https://github.com/rdiehlmartinez/pico)
 - Author: [Richard Diehl Martinez](https://richarddiehlmartinez.com)
 
-## 🔍 Citation
+## ���� Citation
 
 If you use Pico in your research, please cite:
 

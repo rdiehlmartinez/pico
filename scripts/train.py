@@ -14,7 +14,6 @@ from src.training.trainer import Trainer
     "--config_path",
     "config_path",
     type=click.Path(exists=True, path_type=Path),
-    required=True,
     help="Path to the training configuration file",
 )
 def main(config_path: Path) -> None:
