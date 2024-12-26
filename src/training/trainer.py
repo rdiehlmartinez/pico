@@ -85,11 +85,15 @@ class Trainer:
         self.fabric = initialize_fabric(
             self.configs["training"], self.experiment_tracker
         )
+        L.seed_everything(42, verbose=False)
 
         # Setup Dataset, Tokenizer, and Dataloader
-        self.train_dataset = initialize_dataset(self.configs["data"])
+        self.train_dataset = initialize_dataset(self.configs["data"], self.fabric)
         self.train_dataloader = initialize_dataloader(
-            self.configs["data"], self.train_dataset
+            self.configs["data"],
+            self.configs["training"],
+            self.fabric,
+            self.train_dataset,
         )
         self.tokenizer = initialize_tokenizer(self.configs["data"])
 
@@ -105,8 +109,8 @@ class Trainer:
         self.train_dataloader = self.fabric.setup_dataloaders(self.train_dataloader)
 
         # Setup Checkpointing
-        initialize_checkpointing(self.configs["checkpointing"])
-        L.seed_everything(42, verbose=False)
+        initialize_checkpointing(self.configs["checkpointing"], self.fabric)
+        self.fabric.barrier()
 
         # Helper flag to determine if we should load a checkpoint
         self.should_load_checkpoint = (
@@ -132,6 +136,9 @@ class Trainer:
             )
 
             if resume_checkpoint is None:
+                # TODO: This is not very clear - we should probably just raise an error here
+                # beacuse we are not actually loading in from latest checkpoint
+
                 if self.configs["checkpointing"].training.load_latest_checkpoint:
                     self.log(
                         "No checkpoint found at specified path. Starting from latest checkpoint.",
@@ -141,6 +148,7 @@ class Trainer:
                 else:
                     raise ValueError("No checkpoint found at specified path. Exiting.")
             else:
+                # Load checkpoint state
                 (
                     self.model,
                     self.optimizer,
@@ -160,6 +168,8 @@ class Trainer:
                 for _ in range(sub_batch_step):
                     next(train_iterator)
                 self.train_iterator = train_iterator
+
+        self.fabric.barrier()
 
         if self.should_start_from_scratch:
             self.train_start_gradient_step = 0
@@ -267,6 +277,8 @@ class Trainer:
                         self.train_start_gradient_step,
                     )
 
+        self.fabric.barrier()
+
         ########################################################
         #
         # Main Training Loop (see `_training_loop` for details)
@@ -359,8 +371,8 @@ class Trainer:
         # Setup training loop variables
         gradient_step = self.train_start_gradient_step
 
-        # NOTE: these are used to compute the average loss over a training interval (more accurate
-        # than using the loss at the end of the interval)
+        # NOTE: these are used to compute the average loss over a training interval.
+        # This is more accurate than using the loss at the end of the interval.
         interval_loss = torch.tensor(0.0, device=self.fabric.device)
         interval_steps = torch.tensor(0, device=self.fabric.device)
         interval_inf_or_nan_count = torch.tensor(0, device=self.fabric.device)
@@ -369,9 +381,8 @@ class Trainer:
             # Store all sub-batches that make up a full gradient step
             gradient_step_data = {"input_ids": []}
 
-        # NOTE: determine what sub-batch we should start from; Depending on if we are using a
-        # gradient accumulation step, the gradient_step and train_start_sub_batch_step will be
-        # different.
+        # NOTE: determine what sub-batch we should start from; Depending on if we are using
+        # grad accumulation the gradient_step and train_start_sub_batch_step will be different.
         train_start_sub_batch_step = (
             gradient_step
             * self.configs["training"].optimization.gradient_accumulation_steps
@@ -389,6 +400,12 @@ class Trainer:
             _input_ids = torch.tensor(sub_batch["input_ids"], device=self.fabric.device)
             input_ids = _input_ids[:, :-1]
             labels = _input_ids[:, 1:]
+
+            if sub_batch_idx in [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200]:
+                batch_hash = input_ids.sum()
+                self.log(
+                    f"Sub-batch {sub_batch_idx} -- Rank {self.fabric.global_rank} -- Batch Hash {batch_hash} -- Shape {input_ids.shape}"
+                )
 
             if self.should_compute_learning_dynamics:
                 gradient_step_data["input_ids"].extend(sub_batch["input_ids"])
@@ -468,6 +485,8 @@ class Trainer:
                         learning_dynamics_dataset=gradient_step_dataset,
                         tokenizer=self.tokenizer,
                     )
+
+                    # Val dynamics
                     if self.learning_dynamics_eval_dataset is not None:
                         learning_dynamics_val_states = compute_learning_dynamics_states(
                             self.configs["checkpointing"],
@@ -484,17 +503,14 @@ class Trainer:
                             prefix="val",
                         )
 
+                    self.fabric.barrier()
+
             ########################################################
             #
             # Optimization step
             #
             ########################################################
 
-            self.fabric.clip_gradients(
-                self.model,
-                self.optimizer,
-                max_norm=self.configs["training"].optimization.max_norm,
-            )
             self.optimizer.step()
             self.optimizer.zero_grad()
             self.lr_scheduler.step()
@@ -519,7 +535,9 @@ class Trainer:
                     gradient_step,
                 )
 
+                # 3. Evaluation
                 if self.should_evaluate:
+                    self.log(f"Step {gradient_step} -- 📊 Running Evaluation")
                     evaluation_results = run_evaluation(
                         self.configs["evaluation"],
                         self.configs["checkpointing"],
@@ -533,6 +551,8 @@ class Trainer:
                             evaluation_results,
                             gradient_step,
                         )
+
+                self.fabric.barrier()  # Final sync before continuing training
 
             # Break if we've reached training steps
             if gradient_step >= self.configs["training"].max_steps:
@@ -595,11 +615,12 @@ class Trainer:
         self, evaluation_results: Dict[str, Any], gradient_step: int
     ):
         """Log model evaluation metrics to experiment tracking system and console."""
-        self.log(f"Step {gradient_step} -- 📊 Evaluation Results")
-        for i, (metric, result) in enumerate(evaluation_results.items()):
-            prefix = "└──" if i == len(evaluation_results) - 1 else "├──"
-            self.log(f"{prefix} {metric}: {result}")
-            self.fabric.log(f"eval/{metric}", result, step=gradient_step)
+        if self.fabric.global_rank == 0:
+            self.log(f"Step {gradient_step} -- 📊 Evaluation Results")
+            for i, (metric, result) in enumerate(evaluation_results.items()):
+                prefix = "└──" if i == len(evaluation_results) - 1 else "├──"
+                self.log(f"{prefix} {metric}: {result}")
+                self.fabric.log(f"eval/{metric}", result, step=gradient_step)
 
     @rank_zero_only
     def log(self, msg: str, level: int = logging.INFO) -> None:

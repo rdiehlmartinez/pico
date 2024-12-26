@@ -10,7 +10,7 @@ in a subdirectory. This is done to facilitate easier versioning of the HuggingFa
 import os
 import yaml
 from huggingface_hub import upload_folder
-from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
+# from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 
 # typing imports
 from torch.optim import Optimizer
@@ -67,23 +67,15 @@ def load_checkpoint(
         checkpoint_path, checkpointing_config.fabric_checkpoint_dir
     )
 
-    # Load fabric-specific states
-    model_state_path = os.path.join(fabric_checkpoint_path, "model.pt")
-    optimizer_state_path = os.path.join(fabric_checkpoint_path, "optimizer.pt")
-    training_state_path = os.path.join(fabric_checkpoint_path, "training.pt")
+    checkpoint_state = {
+        "model": model,
+        "optimizer": optimizer,
+        "lr_sched": lr_scheduler,
+    }
+    extra_state = fabric.load(fabric_checkpoint_path, state=checkpoint_state)
 
-    # load the checkpoint
-    model_state = fabric.load(model_state_path)
-    optimizer_state = fabric.load(optimizer_state_path)
-    training_state = fabric.load(training_state_path)
-
-    model.load_state_dict(model_state["model"])
-    optimizer.load_state_dict(optimizer_state["optimizer"])
-    lr_scheduler.load_state_dict(optimizer_state["lr_scheduler"])
-
-    # NOTE: need to fast-forward to the
-    gradient_step = training_state["gradient_step"]
-    _set_rng_states(training_state["rng_state"])
+    # NOTE: extra_state will contain any additional states that were saved in the checkpoint
+    gradient_step = extra_state["gradient_step"]
 
     return model, optimizer, lr_scheduler, gradient_step
 
@@ -141,11 +133,6 @@ def save_checkpoint(
 
     """
 
-    # Only rank 0 process saves checkpoints in distributed training
-    if fabric.global_rank != 0:
-        fabric.barrier()
-        return
-
     checkpointing_config = configs["checkpointing"]
 
     # Get the directories from the training config
@@ -169,9 +156,10 @@ def save_checkpoint(
 
     # NOTE: we convert the Pico model to a HuggingFace model before saving it. See `model.py`
     # for more details.
-    hf_model = model.convert_to_hf_model()
-    hf_model.save_pretrained(checkpoint_path)
-    tokenizer.save_pretrained(checkpoint_path)
+    if fabric.global_rank == 0:
+        hf_model = model.convert_to_hf_model()
+        hf_model.save_pretrained(checkpoint_path)
+        tokenizer.save_pretrained(checkpoint_path)
 
     ########################################################
     #
@@ -183,41 +171,29 @@ def save_checkpoint(
     fabric_checkpoint_path = os.path.join(checkpoint_path, fabric_checkpoint_dir)
     os.makedirs(fabric_checkpoint_path, exist_ok=True)
 
-    # Save model state
-    model_state_path = os.path.join(fabric_checkpoint_path, "model.pt")
-    if not os.path.exists(model_state_path):
-        model_state = {"model": model.state_dict()}
-        fabric.save(model_state_path, model_state)
+    # Save model stat
+    checkpoint_state = {
+        "model": model,
+        "optimizer": optimizer,
+        "lr_sched": lr_scheduler,
+        "gradient_step": gradient_step,
+    }
+    fabric.save(fabric_checkpoint_path, checkpoint_state)
 
-    # Save optimizer state
-    optimizer_state_path = os.path.join(fabric_checkpoint_path, "optimizer.pt")
-    if not os.path.exists(optimizer_state_path):
-        optimizer_state = {
-            "optimizer": optimizer.state_dict(),
-            "lr_scheduler": lr_scheduler.state_dict(),
-        }
-        fabric.save(optimizer_state_path, optimizer_state)
+    if fabric.global_rank == 0:
+        # Save config in fabric directory
+        config_path = os.path.join(fabric_checkpoint_path, "config.yaml")
+        if not os.path.exists(config_path):
+            with open(config_path, "w") as f:
+                yaml.dump(configs, f)
 
-    # Save training state
-    training_state_path = os.path.join(fabric_checkpoint_path, "training.pt")
-    if not os.path.exists(training_state_path):
-        training_state = {
-            "gradient_step": gradient_step,
-            "rng_state": _collect_rng_states(),
-        }
-        fabric.save(training_state_path, training_state)
-
-    # Save config in fabric directory
-    config_path = os.path.join(fabric_checkpoint_path, "config.yaml")
-    if not os.path.exists(config_path):
-        with open(config_path, "w") as f:
-            yaml.dump(configs, f)
-
-    # Update latest symlink
-    latest_symlink_path = os.path.join(root_checkpoint_path, "latest")
-    if os.path.lexists(latest_symlink_path):
-        os.remove(latest_symlink_path)
-    os.symlink(f"step_{gradient_step}", latest_symlink_path, target_is_directory=True)
+        # Update latest symlink
+        latest_symlink_path = os.path.join(root_checkpoint_path, "latest")
+        if os.path.lexists(latest_symlink_path):
+            os.remove(latest_symlink_path)
+        os.symlink(
+            f"step_{gradient_step}", latest_symlink_path, target_is_directory=True
+        )
 
     ########################################################
     #
@@ -225,36 +201,35 @@ def save_checkpoint(
     #
     ########################################################
 
-    # Push to HuggingFace Hub if configured
-    if checkpointing_config.save_checkpoint_repo_id is not None:
-        # Upload the HF model
-        hf_model.push_to_hub(
-            repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving HF Model -- Step {gradient_step}",
-            revision=checkpointing_config.run_name,
-            token=os.getenv("HF_TOKEN"),
-        )
-
-        # Upload the fabric checkpoint directory
-        upload_folder(
-            folder_path=fabric_checkpoint_path,
-            path_in_repo=fabric_checkpoint_dir,
-            repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Fabric Checkpoint -- Step {gradient_step}",
-            revision=checkpointing_config.run_name,
-            token=os.getenv("HF_TOKEN"),
-        )
-
-        # Upload logs if requested
-        if upload_logs:
-            logs_path = os.path.join(run_path, logs_dir)
-            upload_folder(
-                folder_path=logs_path,
-                path_in_repo=logs_dir,
+    if fabric.global_rank == 0:
+        # Push to HuggingFace Hub if configured
+        if checkpointing_config.save_checkpoint_repo_id is not None:
+            # Upload the HF model
+            hf_model.push_to_hub(
                 repo_id=checkpointing_config.save_checkpoint_repo_id,
-                commit_message=f"Saving Logs -- Step {gradient_step}",
+                commit_message=f"Saving HF Model -- Step {gradient_step}",
                 revision=checkpointing_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
 
-    fabric.barrier()
+            # Upload the fabric checkpoint directory
+            upload_folder(
+                folder_path=fabric_checkpoint_path,
+                path_in_repo=fabric_checkpoint_dir,
+                repo_id=checkpointing_config.save_checkpoint_repo_id,
+                commit_message=f"Saving Fabric Checkpoint -- Step {gradient_step}",
+                revision=checkpointing_config.run_name,
+                token=os.getenv("HF_TOKEN"),
+            )
+
+            # Upload logs if requested
+            if upload_logs:
+                logs_path = os.path.join(run_path, logs_dir)
+                upload_folder(
+                    folder_path=logs_path,
+                    path_in_repo=logs_dir,
+                    repo_id=checkpointing_config.save_checkpoint_repo_id,
+                    commit_message=f"Saving Logs -- Step {gradient_step}",
+                    revision=checkpointing_config.run_name,
+                    token=os.getenv("HF_TOKEN"),
+                )

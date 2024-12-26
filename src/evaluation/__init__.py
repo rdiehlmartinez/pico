@@ -69,8 +69,7 @@ def run_evaluation(
         # NOTE: by default we only want to run evaluation on a single process; evaluation tasks
         # will typically be run using third-party libraries. These libraries should be in charge of
         # handling the distributed evaluation.
-        fabric.barrier()
-        return
+        return None
 
     if checkpointing_config.evaluation.load_checkpoint_path is not None:
         model_path = checkpointing_config.evaluation.load_checkpoint_path
@@ -89,7 +88,5 @@ def run_evaluation(
             raise ValueError(f"Metric {metric} not supported")
 
         evaluation_results[metric] = paloma_result
-
-    fabric.barrier()
 
     return evaluation_results

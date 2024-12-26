@@ -18,7 +18,7 @@ from dataclasses import fields, is_dataclass
 from datetime import datetime
 import wandb
 from wandb.integration.lightning.fabric import WandbLogger
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, IterableDataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
@@ -185,6 +185,7 @@ def initialize_fabric(
         devices=training_config.fabric.num_devices,
         num_nodes=training_config.fabric.num_nodes,
         loggers=[experiment_tracker] if experiment_tracker is not None else None,
+        strategy=training_config.fabric.strategy,
     )
 
     fabric.launch()
@@ -199,7 +200,31 @@ def initialize_fabric(
 ########################################################
 
 
-def initialize_dataset(data_config: DataConfig):
+# This is a simple implementation of a sharded iterable dataset.
+class ShardedIterableDataset(IterableDataset):
+    def __init__(self, dataset, rank, world_size):
+        self.dataset = dataset
+        self.rank = rank
+        self.world_size = world_size
+
+    def __iter__(self):
+        iterator = iter(self.dataset)
+        # Skip to this worker's shard
+        for _ in range(self.rank):
+            next(iterator)
+
+        # Yield every world_size-th item
+        while True:
+            try:
+                yield next(iterator)
+                # Skip other workers' samples
+                for _ in range(self.world_size - 1):
+                    next(iterator)
+            except StopIteration:
+                break
+
+
+def initialize_dataset(data_config: DataConfig, fabric: L.Fabric):
     """Initialize dataset based on the given config.
 
     Feel free to add any more complicated dataset logic here as well.
@@ -210,8 +235,8 @@ def initialize_dataset(data_config: DataConfig):
     Returns:
         Dataset: Initialized dataset object.
     """
-
-    return load_dataset(data_config.dataset.name, split="train", streaming=True)
+    base_dataset = load_dataset(data_config.dataset.name, split="train", streaming=True)
+    return ShardedIterableDataset(base_dataset, fabric.global_rank, fabric.world_size)
 
 
 def initialize_tokenizer(data_config: DataConfig):
@@ -229,7 +254,12 @@ def initialize_tokenizer(data_config: DataConfig):
     return AutoTokenizer.from_pretrained(data_config.tokenizer.name)
 
 
-def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
+def initialize_dataloader(
+    data_config: DataConfig,
+    training_config: TrainingConfig,
+    fabric: L.Fabric,
+    dataset: Dataset,
+):
     """Initialize the DataLoader for efficient batch processing.
 
     Creates a PyTorch DataLoader that handles batching and data loading for training.
@@ -241,6 +271,8 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
 
     Args:
         data_config: Configuration object containing dataloader settings.
+        training_config: Configuration object containing training settings.
+        fabric: A Lightning Fabric instance.
         dataset: A HuggingFace Dataset object containing tokenized text data.
             Expected to have 'input_ids' field in its items.
 
@@ -251,13 +283,23 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
     def _collate_fn(batch):
         return {"input_ids": [entry["input_ids"] for entry in batch]}
 
+    sub_batch_size = data_config.dataloader.batch_size // (
+        fabric.world_size * training_config.optimization.gradient_accumulation_steps
+    )
+    print(f"Sub-batch size: {sub_batch_size}")
+    print(f"World size: {fabric.world_size}")
+    print(
+        f"Gradient accumulation steps: {training_config.optimization.gradient_accumulation_steps}"
+    )
+    print(f"Batch size: {data_config.dataloader.batch_size}")
+
     # NOTE: We use the sub-batch size for the dataloader, which is the full batch size
     # divided by the gradient accumulation steps. This ensures that the effective batch size
     # is correct.
 
     return DataLoader(
         dataset,
-        batch_size=data_config.dataloader.sub_batch_size,
+        batch_size=sub_batch_size,
         shuffle=False,  # Keep sequential for streaming datasets
         pin_memory=True,  # Speeds up transfer to GPU
         collate_fn=_collate_fn,
@@ -487,7 +529,9 @@ def initialize_logging(
 ########################################################k
 
 
-def initialize_checkpointing(checkpointing_config: CheckpointingConfig):
+def initialize_checkpointing(
+    checkpointing_config: CheckpointingConfig, fabric: L.Fabric
+):
     """Initialize model checkpointing functionality.
 
     Sets up the infrastructure for saving model checkpoints, with support for
@@ -512,6 +556,9 @@ def initialize_checkpointing(checkpointing_config: CheckpointingConfig):
         - Creates a branch named after the run
         - Sets up local repository for pushing checkpoints
     """
+
+    if fabric.global_rank != 0:
+        return
 
     huggingface_repo_id = checkpointing_config.save_checkpoint_repo_id
     if huggingface_repo_id is None:

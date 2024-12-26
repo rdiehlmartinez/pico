@@ -6,7 +6,7 @@ Specifies the hyperparameters for the dataset, dataloader, and tokenizer.
 
 from dataclasses import dataclass, field
 
-from ._constants import VOCAB_SIZE, BATCH_SIZE, MAX_SEQ_LEN, GRADIENT_ACCUMULATION_STEPS
+from ._constants import VOCAB_SIZE, BATCH_SIZE
 
 
 @dataclass
@@ -18,9 +18,7 @@ class DatasetConfig:
 class DataLoaderConfig:
     # NOTE: You should only change these values jointly with the training config; so that the
     # sub-batch size is consistent with the gradient accumulation steps
-    full_batch_size: int = BATCH_SIZE
-    sub_batch_size: int = BATCH_SIZE // GRADIENT_ACCUMULATION_STEPS
-    max_seq_len: int = MAX_SEQ_LEN
+    batch_size: int = BATCH_SIZE
 
 
 @dataclass

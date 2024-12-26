@@ -6,9 +6,9 @@ We save the learning dynamics states in a subdirectory of the checkpointing dire
 
 import os
 import re
-import copy
 import torch
 
+from src.model import Pico
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
@@ -229,7 +229,6 @@ def compute_learning_dynamics_states(
     """
 
     if fabric.global_rank != 0:
-        fabric.barrier()
         return
 
     # Setting up datalaoder for
@@ -243,7 +242,10 @@ def compute_learning_dynamics_states(
     extractor_dataloader = fabric.setup_dataloaders(dataloader)
 
     # creating a copy of model with zero gradients
-    _model = copy.deepcopy(model)
+    _model = Pico(model.config, model.fabric)
+    _model.load_state_dict(model.state_dict())
+    if hasattr(model, "_forward_module"):
+        _model = fabric.setup_module(_model)
     _model.zero_grad()
 
     # setup forward hooks for the model to save activations and weights at each layer
@@ -255,8 +257,6 @@ def compute_learning_dynamics_states(
             extractor_dataloader, compute_gradients=compute_gradients
         )
     )
-
-    fabric.barrier()
 
     return {
         "checkpoint_activations": checkpoint_activations,
@@ -308,7 +308,6 @@ def save_learning_dynamics_states(
 
     # Only rank 0 process saves checkpoints in distributed training
     if fabric.global_rank != 0:
-        fabric.barrier()
         return
 
     runs_dir = checkpointing_config.runs_dir
@@ -357,5 +356,3 @@ def save_learning_dynamics_states(
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )
-
-    fabric.barrier()

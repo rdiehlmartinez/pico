@@ -14,6 +14,7 @@ class FabricConfig:
     num_devices: int = 1
     precision: str = "16-mixed"
     accelerator: str = "cuda"
+    strategy: str = "deepspeed_stage_2"
 
 
 @dataclass
@@ -24,10 +25,7 @@ class OptimizationConfig:
 
     # Learning Rate Scheduler
     lr_scheduler: str = "linear_with_warmup"
-    lr_warmup_steps: int = 20
-
-    # Gradient Clipping
-    max_norm: float = 1.0
+    lr_warmup_steps: int = 50_000
 
     # Gradient Accumulation
     gradient_accumulation_steps: int = GRADIENT_ACCUMULATION_STEPS

@@ -37,7 +37,6 @@ def save_evaluation_results(
 
     # Only save on rank 0 to avoid conflicts
     if fabric.global_rank != 0:
-        fabric.barrier()
         return
 
     run_dir = os.path.join(checkpointing_config.runs_dir, checkpointing_config.run_name)
@@ -45,25 +44,22 @@ def save_evaluation_results(
         run_dir, checkpointing_config.evaluation.eval_results_dir
     )
 
-    if fabric.global_rank == 0:
-        os.makedirs(eval_results_dir, exist_ok=True)
+    os.makedirs(eval_results_dir, exist_ok=True)
 
-        curr_eval_results_path = os.path.join(
-            eval_results_dir, f"step_{gradient_step}.json"
+    curr_eval_results_path = os.path.join(
+        eval_results_dir, f"step_{gradient_step}.json"
+    )
+
+    # save out as json
+    with open(curr_eval_results_path, "w") as f:
+        json.dump(evaluation_results, f)
+
+    if checkpointing_config.save_checkpoint_repo_id is not None:
+        upload_folder(
+            folder_path=eval_results_dir,
+            path_in_repo=checkpointing_config.evaluation.eval_results_dir,
+            repo_id=checkpointing_config.save_checkpoint_repo_id,
+            commit_message=f"Saving Evaluation Results -- Step {gradient_step}",
+            revision=checkpointing_config.run_name,
+            token=os.getenv("HF_TOKEN"),
         )
-
-        # save out as json
-        with open(curr_eval_results_path, "w") as f:
-            json.dump(evaluation_results, f)
-
-        if checkpointing_config.save_checkpoint_repo_id is not None:
-            upload_folder(
-                folder_path=eval_results_dir,
-                path_in_repo=checkpointing_config.evaluation.eval_results_dir,
-                repo_id=checkpointing_config.save_checkpoint_repo_id,
-                commit_message=f"Saving Evaluation Results -- Step {gradient_step}",
-                revision=checkpointing_config.run_name,
-                token=os.getenv("HF_TOKEN"),
-            )
-
-    fabric.barrier()
