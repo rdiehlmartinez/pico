@@ -16,9 +16,9 @@ from lightning.fabric import Fabric
 
 def save_evaluation_results(
     checkpointing_config: CheckpointingConfig,
+    checkpoint_step: int,
     fabric: Fabric,
     evaluation_results: Dict[str, Any],
-    gradient_step: int,
 ) -> None:
     """Save evaluation results to disk and optionally to HuggingFace Hub.
 
@@ -26,13 +26,13 @@ def save_evaluation_results(
     {checkpointing_config.runs_dir}/
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.eval_results_dir}/
-                └── step_{gradient_step}.json
+                └── step_{checkpoint_step}.json
 
     Args:
         checkpointing_config: Configuration object containing checkpoint settings
+        checkpoint_step: Current training checkpoint step (i.e. number of learning steps taken)
         fabric: Lightning Fabric instance
         evaluation_results: Dictionary containing evaluation metrics
-        gradient_step: Current training gradient step (i.e. number of learning steps taken)
     """
 
     # Only save on rank 0 to avoid conflicts
@@ -47,7 +47,7 @@ def save_evaluation_results(
     os.makedirs(eval_results_dir, exist_ok=True)
 
     curr_eval_results_path = os.path.join(
-        eval_results_dir, f"step_{gradient_step}.json"
+        eval_results_dir, f"step_{checkpoint_step}.json"
     )
 
     # save out as json
@@ -59,7 +59,7 @@ def save_evaluation_results(
             folder_path=eval_results_dir,
             path_in_repo=checkpointing_config.evaluation.eval_results_dir,
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Evaluation Results -- Step {gradient_step}",
+            commit_message=f"Saving Evaluation Results -- Step {checkpoint_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )

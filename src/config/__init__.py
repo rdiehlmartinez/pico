@@ -20,5 +20,5 @@ from .training_config import TrainingConfig
 from .data_config import DataConfig
 from .model_config import ModelConfig
 from .evaluation_config import EvaluationConfig
-from .logging_config import LoggingConfig
+from .monitoring_config import MonitoringConfig
 from .checkpointing_config import CheckpointingConfig

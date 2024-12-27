@@ -235,9 +235,9 @@ def compute_learning_dynamics_states(
     def _collate_fn(batch):
         return {"input_ids": [entry["input_ids"] for entry in batch]}
 
-    sub_batch_size = checkpointing_config.learning_dynamics.sub_batch_size
+    batch_size = checkpointing_config.learning_dynamics.batch_size
     dataloader = DataLoader(
-        dataset, batch_size=sub_batch_size, shuffle=False, collate_fn=_collate_fn
+        dataset, batch_size=batch_size, shuffle=False, collate_fn=_collate_fn
     )
     extractor_dataloader = fabric.setup_dataloaders(dataloader)
 
@@ -267,13 +267,13 @@ def compute_learning_dynamics_states(
 
 def save_learning_dynamics_states(
     checkpointing_config: CheckpointingConfig,
+    checkpoint_step: int,
+    prefix: str,
     fabric: Fabric,
     learning_dynamics_states: Dict[str, torch.Tensor],
-    gradient_step: int,
-    prefix: str = "train",
     learning_dynamics_dataset: Optional[Dataset] = None,
     tokenizer: Optional[PreTrainedTokenizerBase] = None,
-):
+) -> None:
     """Save the learning dynamics metrics to the checkpointing directory.
 
     By default only the learning dynamics states are saved. If the learning dynamics dataset
@@ -288,22 +288,23 @@ def save_learning_dynamics_states(
     {checkpointing_config.runs_dir}/
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.checkpoints_dir}/
-                ├── step_{gradient_step}/
+                ├── step_{checkpoint_step}/
                 │   └── {checkpointing_config.learning_dynamics_dir}/ # Learning Dynamics files
                 │      ├── {prefix}_activations.pt
                 │      ├── {prefix}_weights.pt
                 │      └── {prefix}_gradients.pt
                 │      └── {prefix}_data/ # if learning_dynamics_dataset is provided
-                └── latest -> step_{gradient_step}/
+                └── latest -> step_{checkpoint_step}/
 
     Args:
         checkpointing_config: The configuration object for checkpointing.
+        checkpoint_step: The checkpoint step at which the learning dynamics states were computed.
+        prefix: The prefix for the learning dynamics states.
         fabric: The Fabric instance for distributed training.
         learning_dynamics_states: The learning dynamics states to save.
-        gradient_step: The gradient step at which the learning dynamics states were computed.
         learning_dynamics_dataset: The dataset containing learning dynamics data,
-            including input IDs that need to be decoded.
-        tokenizer: The tokenizer used to decode input IDs into text.
+            including input IDs that need to be decoded. (optional)
+        tokenizer: The tokenizer used to decode input IDs into text. (optional)
     """
 
     # Only rank 0 process saves checkpoints in distributed training
@@ -317,7 +318,7 @@ def save_learning_dynamics_states(
 
     run_path = os.path.join(runs_dir, run_name)
     root_checkpoint_path = os.path.join(run_path, checkpoints_dir)
-    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{gradient_step}")
+    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{checkpoint_step}")
     learning_dynamics_path = os.path.join(checkpoint_path, learning_dynamics_dir)
     os.makedirs(learning_dynamics_path, exist_ok=True)
 
@@ -352,7 +353,7 @@ def save_learning_dynamics_states(
             folder_path=learning_dynamics_path,
             path_in_repo=learning_dynamics_dir,
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Learning Dynamics Datas -- Step {gradient_step}",
+            commit_message=f"Saving Learning Dynamics Datas -- Step {checkpoint_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )

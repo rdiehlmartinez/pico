@@ -19,7 +19,7 @@ from torch import nn
 from transformers import PreTrainedTokenizerBase
 from lightning.fabric import Fabric
 from src.config import CheckpointingConfig
-from typing import Dict, Any, Union
+from typing import Dict, Any, Union, Tuple
 
 
 def load_checkpoint(
@@ -29,7 +29,7 @@ def load_checkpoint(
     model: nn.Module,
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
-):
+) -> Tuple[nn.Module, Optimizer, LRScheduler, int]:
     """Load model checkpoint and associated states from a given step.
 
     Args:
@@ -41,7 +41,7 @@ def load_checkpoint(
         lr_scheduler: The learning rate scheduler to load states into
 
     Returns:
-        (model, optimizer, lr_scheduler, step)
+        Tuple containing the model, optimizer, lr_scheduler, and checkpoint step.
         Returns None if no checkpoint is found.
     """
 
@@ -85,7 +85,7 @@ def save_checkpoint(
     lr_scheduler: LRScheduler,
     tokenizer: PreTrainedTokenizerBase,
     upload_logs: bool = True,
-):
+) -> None:
     """Save training checkpoint and associated states to disk and optionally to HuggingFace Hub.
 
     We save the following files:
