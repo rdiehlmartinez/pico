@@ -19,22 +19,22 @@ from torch import nn
 from transformers import PreTrainedTokenizerBase
 from lightning.fabric import Fabric
 from src.config import CheckpointingConfig
-from typing import Dict, Any
+from typing import Dict, Any, Union
 
 
 def load_checkpoint(
     checkpointing_config: CheckpointingConfig,
+    checkpoint_step: Union[str, int],
     fabric: Fabric,
     model: nn.Module,
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
 ):
-    """Load model checkpoint and associated states from disk or latest checkpoint.
+    """Load model checkpoint and associated states from a given step.
 
     Args:
         checkpointing_config: Configuration object containing checkpoint settings
-            - load_checkpoint_path: Optional specific checkpoint path
-            - load_latest_checkpoint: Boolean to load most recent checkpoint
+        checkpoint_step: The step at which to load the checkpoint
         fabric: Lightning Fabric instance for distributed training support
         model: The model instance to load weights into
         optimizer: The optimizer instance to load states into
@@ -45,19 +45,15 @@ def load_checkpoint(
         Returns None if no checkpoint is found.
     """
 
-    # NOTE: if both load_checkpoint_path and load_latest_checkpoint are set, we prioritize
-    # load_checkpoint_path
-    if checkpointing_config.training.load_checkpoint_path:
-        checkpoint_path = checkpointing_config.training.load_checkpoint_path
-    elif checkpointing_config.training.load_latest_checkpoint:
-        checkpoint_path = os.path.join(
-            checkpointing_config.runs_dir,
-            checkpointing_config.run_name,
-            checkpointing_config.checkpoints_dir,
-            "latest",
-        )
-    else:
-        raise ValueError("No checkpoint path specified")
+    if isinstance(checkpoint_step, int):
+        checkpoint_step = f"step_{checkpoint_step}"
+
+    checkpoint_path = os.path.join(
+        checkpointing_config.runs_dir,
+        checkpointing_config.run_name,
+        checkpointing_config.checkpoints_dir,
+        checkpoint_step,
+    )
 
     if not os.path.exists(checkpoint_path):
         return None
@@ -68,26 +64,26 @@ def load_checkpoint(
     )
 
     checkpoint_state = {
-        "model": model,
-        "optimizer": optimizer,
-        "lr_sched": lr_scheduler,
+        "_model": model,
+        "_optimizer": optimizer,
+        "_lr_scheduler": lr_scheduler,
     }
     extra_state = fabric.load(fabric_checkpoint_path, state=checkpoint_state)
 
     # NOTE: extra_state will contain any additional states that were saved in the checkpoint
-    gradient_step = extra_state["gradient_step"]
+    checkpoint_step = extra_state["_checkpoint_step"]
 
-    return model, optimizer, lr_scheduler, gradient_step
+    return model, optimizer, lr_scheduler, checkpoint_step
 
 
 def save_checkpoint(
     configs: Dict[str, Any],
+    checkpoint_step: int,
     fabric: Fabric,
     model: nn.Module,
     optimizer: Optimizer,
     lr_scheduler: LRScheduler,
     tokenizer: PreTrainedTokenizerBase,
-    gradient_step: int,
     upload_logs: bool = True,
 ):
     """Save training checkpoint and associated states to disk and optionally to HuggingFace Hub.
@@ -109,26 +105,24 @@ def save_checkpoint(
     {checkpointing_config.runs_dir}/
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.checkpoints_dir}/
-                ├── step_{gradient_step}/
+                ├── step_{checkpoint_step}/
                 │   ├── config.json              # HuggingFace model config
                 │   ├── pytorch_model.bin        # HuggingFace model weights
                 │   ├── vocab.json               # Tokenizer vocab
                 │   ├── merges.txt               # Tokenizer merges
                 │   └── {checkpointing_config.fabric_checkpoint_dir}/ # Fabric-specific files
                 │      ├── config.yaml           # Full training config
-                │      ├── model.pt              # Fabric model state
-                │      ├── optimizer.pt          # Optimizer and LR scheduler states
-                │      └── training.pt           # Training progress and RNG states
-                └── latest -> step_{gradient_step}/
+                │      └── checkpoint/           # Distributed model checkpoint files
+                └── latest -> step_{checkpoint_step}/
 
     Args:
         configs: A dictionary containing the initialized configuration objects.
+        checkpoint_step: The current training checkpoint step (i.e. number of learning steps taken)
         fabric: Lightning Fabric instance for distributed training support
         model: The model instance to save
         optimizer: The optimizer instance to save
         lr_scheduler: The learning rate scheduler to save
         tokenizer: The tokenizer to save
-        gradient_step: Current training gradient step (i.e. number of learning steps taken)
         upload_logs: Whether to upload training logs to HF Hub (default: True)
 
     """
@@ -143,7 +137,7 @@ def save_checkpoint(
 
     run_path = os.path.join(runs_dir, checkpointing_config.run_name)
     root_checkpoint_path = os.path.join(run_path, checkpoints_dir)
-    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{gradient_step}")
+    checkpoint_path = os.path.join(root_checkpoint_path, f"step_{checkpoint_step}")
 
     # Create directories
     os.makedirs(checkpoint_path, exist_ok=True)
@@ -171,12 +165,12 @@ def save_checkpoint(
     fabric_checkpoint_path = os.path.join(checkpoint_path, fabric_checkpoint_dir)
     os.makedirs(fabric_checkpoint_path, exist_ok=True)
 
-    # Save model stat
+    # Save model states (use underscore to avoid conflicts with third-party libraries)
     checkpoint_state = {
-        "model": model,
-        "optimizer": optimizer,
-        "lr_sched": lr_scheduler,
-        "gradient_step": gradient_step,
+        "_model": model,
+        "_optimizer": optimizer,
+        "_lr_scheduler": lr_scheduler,
+        "_checkpoint_step": checkpoint_step,
     }
     fabric.save(fabric_checkpoint_path, checkpoint_state)
 
@@ -192,7 +186,7 @@ def save_checkpoint(
         if os.path.lexists(latest_symlink_path):
             os.remove(latest_symlink_path)
         os.symlink(
-            f"step_{gradient_step}", latest_symlink_path, target_is_directory=True
+            f"step_{checkpoint_step}", latest_symlink_path, target_is_directory=True
         )
 
     ########################################################
@@ -207,7 +201,7 @@ def save_checkpoint(
             # Upload the HF model
             hf_model.push_to_hub(
                 repo_id=checkpointing_config.save_checkpoint_repo_id,
-                commit_message=f"Saving HF Model -- Step {gradient_step}",
+                commit_message=f"Saving HF Model -- Step {checkpoint_step}",
                 revision=checkpointing_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
@@ -217,7 +211,7 @@ def save_checkpoint(
                 folder_path=fabric_checkpoint_path,
                 path_in_repo=fabric_checkpoint_dir,
                 repo_id=checkpointing_config.save_checkpoint_repo_id,
-                commit_message=f"Saving Fabric Checkpoint -- Step {gradient_step}",
+                commit_message=f"Saving Fabric Checkpoint -- Step {checkpoint_step}",
                 revision=checkpointing_config.run_name,
                 token=os.getenv("HF_TOKEN"),
             )
@@ -229,7 +223,7 @@ def save_checkpoint(
                     folder_path=logs_path,
                     path_in_repo=logs_dir,
                     repo_id=checkpointing_config.save_checkpoint_repo_id,
-                    commit_message=f"Saving Logs -- Step {gradient_step}",
+                    commit_message=f"Saving Logs -- Step {checkpoint_step}",
                     revision=checkpointing_config.run_name,
                     token=os.getenv("HF_TOKEN"),
                 )

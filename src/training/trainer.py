@@ -74,34 +74,38 @@ class Trainer:
         self.configs = initialize_configuration(config_path)
 
         # Setup Run Directory (i.e. where we store checkpoints, logs, etc.)
-        initialize_run_dir(self.configs["checkpointing"])
+        initialize_run_dir(checkpointing_config=self.configs["checkpointing"])
 
         # Setup Logger
         self.logger, self.experiment_tracker = initialize_logging(
-            self.configs["logging"], self.configs["checkpointing"]
+            logging_config=self.configs["logging"],
+            checkpointing_config=self.configs["checkpointing"],
         )
 
         # Setup Fabric
         self.fabric = initialize_fabric(
-            self.configs["training"], self.experiment_tracker
+            training_config=self.configs["training"],
+            experiment_tracker=self.experiment_tracker,
         )
         L.seed_everything(42, verbose=False)
 
         # Setup Dataset, Tokenizer, and Dataloader
         self.train_dataset = initialize_dataset(self.configs["data"], self.fabric)
         self.train_dataloader = initialize_dataloader(
-            self.configs["data"],
-            self.configs["training"],
-            self.fabric,
-            self.train_dataset,
+            data_config=self.configs["data"],
+            training_config=self.configs["training"],
+            fabric=self.fabric,
+            dataset=self.train_dataset,
         )
-        self.tokenizer = initialize_tokenizer(self.configs["data"])
+        self.tokenizer = initialize_tokenizer(data_config=self.configs["data"])
 
         # Setup Model, Optimizer, and Dataloaders
-        self.model = Pico(self.configs["model"], self.fabric)
-        self.optimizer = initialize_optimizer(self.configs["training"], self.model)
+        self.model = Pico(model_config=self.configs["model"], fabric=self.fabric)
+        self.optimizer = initialize_optimizer(
+            training_config=self.configs["training"], model=self.model
+        )
         self.lr_scheduler = initialize_lr_scheduler(
-            self.configs["training"], self.optimizer
+            training_config=self.configs["training"], optimizer=self.optimizer
         )
 
         # Wrap with Fabric
@@ -109,15 +113,10 @@ class Trainer:
         self.train_dataloader = self.fabric.setup_dataloaders(self.train_dataloader)
 
         # Setup Checkpointing
-        initialize_checkpointing(self.configs["checkpointing"], self.fabric)
-        self.fabric.barrier()
-
-        # Helper flag to determine if we should load a checkpoint
-        self.should_load_checkpoint = (
-            self.configs["checkpointing"].training.load_checkpoint_path is not None
-            or self.configs["checkpointing"].training.load_latest_checkpoint
+        initialize_checkpointing(
+            checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
         )
-        self.should_start_from_scratch = not self.should_load_checkpoint
+        self.fabric.barrier()
 
         ########################################################
         #
@@ -125,30 +124,24 @@ class Trainer:
         #
         ########################################################
 
+        self.should_load_checkpoint = self.configs["checkpointing"].training.auto_resume
+        self.should_start_from_scratch = not self.should_load_checkpoint
+
         # Possibly load a checkpoint
         if self.should_load_checkpoint:
             resume_checkpoint = load_checkpoint(
-                self.configs["checkpointing"],
-                self.fabric,
-                self.model,
-                self.optimizer,
-                self.lr_scheduler,
+                checkpointing_config=self.configs["checkpointing"],
+                checkpoint_name="latest",
+                fabric=self.fabric,
+                model=self.model,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
             )
 
             if resume_checkpoint is None:
-                # TODO: This is not very clear - we should probably just raise an error here
-                # beacuse we are not actually loading in from latest checkpoint
-
-                if self.configs["checkpointing"].training.load_latest_checkpoint:
-                    self.log(
-                        "No checkpoint found at specified path. Starting from latest checkpoint.",
-                        level=logging.WARNING,
-                    )
-                    self.should_start_from_scratch = True
-                else:
-                    raise ValueError("No checkpoint found at specified path. Exiting.")
+                # If no checkpoint is found, we start from scratch
+                self.should_start_from_scratch = True
             else:
-                # Load checkpoint state
                 (
                     self.model,
                     self.optimizer,
@@ -156,10 +149,9 @@ class Trainer:
                     self.train_start_gradient_step,
                 ) = resume_checkpoint
 
-                # NOTE: This is important!! We need to fast-forward the iterator to the correct
-                # sub-batch; this is used to determine what sub-batch we should start from so that
-                # when we resume training, we continue from the correct batch of data we would have
-                # seen had training not previously stopped.
+                # NOTE: We need to fast-forward the iterator to the correct step so that we can
+                # continue from the correct batch of data we would have seen had training not
+                # previously stopped.
                 train_iterator = iter(self.train_dataloader)
                 sub_batch_step = (
                     self.train_start_gradient_step
@@ -169,7 +161,7 @@ class Trainer:
                     next(train_iterator)
                 self.train_iterator = train_iterator
 
-        self.fabric.barrier()
+                self.fabric.barrier()  # Sync so that all processes are on the same step
 
         if self.should_start_from_scratch:
             self.train_start_gradient_step = 0
@@ -183,8 +175,8 @@ class Trainer:
 
         # Helper flag to determine if we should evaluate the model
         self.should_evaluate = (
-            self.configs["evaluation"].evaluation_metrics is not None
-            and len(self.configs["evaluation"].evaluation_metrics) > 0
+            self.configs["evaluation"].metrics is not None
+            and len(self.configs["evaluation"].metrics) > 0
         )
 
         self.should_compute_learning_dynamics = (
@@ -228,13 +220,13 @@ class Trainer:
 
         # Save Initial Checkpoint; NOTE: if the checkpoint already exists, this performs a no-op
         save_checkpoint(
-            self.configs,
-            self.fabric,
-            self.model,
-            self.optimizer,
-            self.lr_scheduler,
-            self.tokenizer,
-            self.train_start_gradient_step,
+            checkpointing_config=self.configs["checkpointing"],
+            checkpoint_step=self.train_start_gradient_step,
+            fabric=self.fabric,
+            model=self.model,
+            optimizer=self.optimizer,
+            lr_scheduler=self.lr_scheduler,
+            tokenizer=self.tokenizer,
             upload_logs=False,
         )
 
@@ -242,18 +234,18 @@ class Trainer:
         if self.should_evaluate:
             if self.train_start_gradient_step == 0:
                 evaluation_results = run_evaluation(
-                    self.configs["evaluation"],
-                    self.configs["checkpointing"],
-                    self.fabric,
+                    evaluation_config=self.configs["evaluation"],
+                    checkpointing_config=self.configs["checkpointing"],
+                    fabric=self.fabric,
                 )
                 self._log_evaluation_results(
                     evaluation_results, self.train_start_gradient_step
                 )
                 save_evaluation_results(
-                    self.configs["checkpointing"],
-                    self.fabric,
-                    evaluation_results,
-                    self.train_start_gradient_step,
+                    checkpointing_config=self.configs["checkpointing"],
+                    fabric=self.fabric,
+                    evaluation_results=evaluation_results,
+                    checkpoint_step=self.train_start_gradient_step,
                 )
             else:
                 # NOTE: If the run crashed while evaluating, we need to restart the evaluation
@@ -263,18 +255,18 @@ class Trainer:
                 )
                 if not os.path.exists(eval_results_path):
                     evaluation_results = run_evaluation(
-                        self.configs["evaluation"],
-                        self.configs["checkpointing"],
-                        self.fabric,
+                        evaluation_config=self.configs["evaluation"],
+                        checkpointing_config=self.configs["checkpointing"],
+                        fabric=self.fabric,
                     )
                     self._log_evaluation_results(
                         evaluation_results, self.train_start_gradient_step
                     )
                     save_evaluation_results(
-                        self.configs["checkpointing"],
-                        self.fabric,
-                        evaluation_results,
-                        self.train_start_gradient_step,
+                        checkpointing_config=self.configs["checkpointing"],
+                        fabric=self.fabric,
+                        evaluation_results=evaluation_results,
+                        checkpoint_step=self.train_start_gradient_step,
                     )
 
         self.fabric.barrier()
@@ -302,17 +294,17 @@ class Trainer:
             if self.learning_dynamics_eval_dataset is not None:
                 self.log(f"Step {final_step} -- 📈 Saving Learning Dynamics")
                 learning_dynamics_val_states = compute_learning_dynamics_states(
-                    self.configs["checkpointing"],
-                    self.fabric,
-                    self.model,
-                    self.learning_dynamics_eval_dataset,
+                    checkpointing_config=self.configs["checkpointing"],
+                    fabric=self.fabric,
+                    model=self.model,
+                    learning_dynamics_dataset=self.learning_dynamics_eval_dataset,
                     compute_gradients=False,
                 )
                 save_learning_dynamics_states(
-                    self.configs["checkpointing"],
-                    self.fabric,
-                    learning_dynamics_val_states,
-                    final_step,
+                    checkpointing_config=self.configs["checkpointing"],
+                    fabric=self.fabric,
+                    learning_dynamics_states=learning_dynamics_val_states,
+                    checkpoint_step=final_step,
                     prefix="val",
                 )
 
@@ -320,28 +312,28 @@ class Trainer:
         if final_step % self.configs["checkpointing"].save_every_n_steps != 0:
             self.log(f"Step {final_step} -- 💾 Saving Final Checkpoint")
             save_checkpoint(
-                self.configs,
-                self.fabric,
-                self.model,
-                self.optimizer,
-                self.lr_scheduler,
-                self.tokenizer,
-                final_step,
+                checkpointing_config=self.configs["checkpointing"],
+                checkpoint_step=final_step,
+                fabric=self.fabric,
+                model=self.model,
+                optimizer=self.optimizer,
+                lr_scheduler=self.lr_scheduler,
+                tokenizer=self.tokenizer,
             )
 
             # Final evaluation
             if self.should_evaluate:
                 evaluation_results = run_evaluation(
-                    self.configs["evaluation"],
-                    self.configs["checkpointing"],
-                    self.fabric,
+                    evaluation_config=self.configs["evaluation"],
+                    checkpointing_config=self.configs["checkpointing"],
+                    fabric=self.fabric,
                 )
                 self._log_evaluation_results(evaluation_results, final_step)
                 save_evaluation_results(
-                    self.configs["checkpointing"],
-                    self.fabric,
-                    evaluation_results,
-                    final_step,
+                    checkpointing_config=self.configs["checkpointing"],
+                    checkpoint_step=final_step,
+                    fabric=self.fabric,
+                    evaluation_results=evaluation_results,
                 )
 
         self.log(f"🎉 Training complete! Final step: {final_step}")
@@ -401,12 +393,6 @@ class Trainer:
             input_ids = _input_ids[:, :-1]
             labels = _input_ids[:, 1:]
 
-            if sub_batch_idx in [0, 20, 40, 60, 80, 100, 120, 140, 160, 180, 200]:
-                batch_hash = input_ids.sum()
-                self.log(
-                    f"Sub-batch {sub_batch_idx} -- Rank {self.fabric.global_rank} -- Batch Hash {batch_hash} -- Shape {input_ids.shape}"
-                )
-
             if self.should_compute_learning_dynamics:
                 gradient_step_data["input_ids"].extend(sub_batch["input_ids"])
 
@@ -465,22 +451,23 @@ class Trainer:
             # Learning Dynamics Checkpointing
             #
             ########################################################
+
             if gradient_step % self.configs["checkpointing"].save_every_n_steps == 0:
                 if self.should_compute_learning_dynamics:
                     self.log(f"Step {gradient_step} -- 📈 Saving Learning Dynamics")
                     gradient_step_dataset = Dataset.from_dict(gradient_step_data)
                     learning_dynamics_train_states = compute_learning_dynamics_states(
-                        self.configs["checkpointing"],
-                        self.fabric,
-                        self.model,
-                        gradient_step_dataset,
+                        checkpointing_config=self.configs["checkpointing"],
+                        fabric=self.fabric,
+                        model=self.model,
+                        learning_dynamics_dataset=gradient_step_dataset,
                         compute_gradients=True,
                     )
                     save_learning_dynamics_states(
-                        self.configs["checkpointing"],
-                        self.fabric,
-                        learning_dynamics_train_states,
-                        gradient_step,
+                        checkpointing_config=self.configs["checkpointing"],
+                        fabric=self.fabric,
+                        learning_dynamics_states=learning_dynamics_train_states,
+                        checkpoint_step=gradient_step,
                         prefix="train",
                         learning_dynamics_dataset=gradient_step_dataset,
                         tokenizer=self.tokenizer,
@@ -489,17 +476,17 @@ class Trainer:
                     # Val dynamics
                     if self.learning_dynamics_eval_dataset is not None:
                         learning_dynamics_val_states = compute_learning_dynamics_states(
-                            self.configs["checkpointing"],
-                            self.fabric,
-                            self.model,
-                            self.learning_dynamics_eval_dataset,
+                            checkpointing_config=self.configs["checkpointing"],
+                            fabric=self.fabric,
+                            model=self.model,
+                            learning_dynamics_dataset=self.learning_dynamics_eval_dataset,
                             compute_gradients=False,
                         )
                         save_learning_dynamics_states(
-                            self.configs["checkpointing"],
-                            self.fabric,
-                            learning_dynamics_val_states,
-                            gradient_step,
+                            checkpointing_config=self.configs["checkpointing"],
+                            fabric=self.fabric,
+                            learning_dynamics_states=learning_dynamics_val_states,
+                            checkpoint_step=gradient_step,
                             prefix="val",
                         )
 
@@ -526,30 +513,30 @@ class Trainer:
             if gradient_step % self.configs["checkpointing"].save_every_n_steps == 0:
                 self.log(f"Step {gradient_step} -- 💾 Saving Checkpoint")
                 save_checkpoint(
-                    self.configs,
-                    self.fabric,
-                    self.model,
-                    self.optimizer,
-                    self.lr_scheduler,
-                    self.tokenizer,
-                    gradient_step,
+                    checkpointing_config=self.configs["checkpointing"],
+                    checkpoint_step=gradient_step,
+                    fabric=self.fabric,
+                    model=self.model,
+                    optimizer=self.optimizer,
+                    lr_scheduler=self.lr_scheduler,
+                    tokenizer=self.tokenizer,
                 )
 
                 # 3. Evaluation
                 if self.should_evaluate:
                     self.log(f"Step {gradient_step} -- 📊 Running Evaluation")
                     evaluation_results = run_evaluation(
-                        self.configs["evaluation"],
-                        self.configs["checkpointing"],
-                        self.fabric,
+                        evaluation_config=self.configs["evaluation"],
+                        checkpointing_config=self.configs["checkpointing"],
+                        fabric=self.fabric,
                     )
                     if evaluation_results is not None:
                         self._log_evaluation_results(evaluation_results, gradient_step)
                         save_evaluation_results(
-                            self.configs["checkpointing"],
-                            self.fabric,
-                            evaluation_results,
-                            gradient_step,
+                            checkpointing_config=self.configs["checkpointing"],
+                            fabric=self.fabric,
+                            evaluation_results=evaluation_results,
+                            checkpoint_step=gradient_step,
                         )
 
                 self.fabric.barrier()  # Final sync before continuing training

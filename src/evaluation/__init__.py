@@ -39,7 +39,7 @@ def run_evaluation(
 
     Args:
         evaluation_config (EvaluationConfig): Configuration object containing:
-            - evaluation_metrics (List[str]): Metrics to evaluate; each metric should have its
+            - metrics (List[str]): Metrics to evaluate; each metric should have its
                 own config. Currently supported: ["paloma"];
             - paloma (PalomaConfig): Configuration for Paloma evaluation
                 - max_length (int): Maximum sequence length
@@ -58,7 +58,7 @@ def run_evaluation(
         results = run_evaluation(
             EvaluationConfig(
                 run_name="experiment_1",
-                evaluation_metrics=["paloma"],
+                metrics=["paloma"],
                 paloma=PalomaConfig(max_length=2048, batch_size=16)
             )
         )
@@ -80,7 +80,7 @@ def run_evaluation(
 
     evaluation_results = {}
 
-    for metric in evaluation_config.evaluation_metrics:
+    for metric in evaluation_config.metrics:
         # NOTE: add your own metrics here
         if metric == "paloma":
             paloma_result = run_paloma_evaluation(model_path, evaluation_config.paloma)

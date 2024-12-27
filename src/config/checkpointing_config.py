@@ -23,8 +23,7 @@ from ._constants import (
 
 @dataclass
 class TrainingCheckpointingConfig:
-    load_checkpoint_path: Optional[str] = None
-    load_latest_checkpoint: bool = False
+    auto_resume: bool = True
 
 
 @dataclass
