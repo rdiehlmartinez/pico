@@ -321,7 +321,7 @@ class Trainer:
                     checkpointing_config=self.configs["checkpointing"],
                     fabric=self.fabric,
                     model=self.model,
-                    learning_dynamics_dataset=self.learning_dynamics_eval_dataset,
+                    dataset=self.learning_dynamics_eval_dataset,
                     compute_gradients=False,
                 )
                 save_learning_dynamics_states(
@@ -488,7 +488,7 @@ class Trainer:
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
                         model=self.model,
-                        learning_dynamics_dataset=full_batch_dataset,
+                        dataset=full_batch_dataset,
                         compute_gradients=True,
                     )
                     save_learning_dynamics_states(
@@ -507,7 +507,7 @@ class Trainer:
                             checkpointing_config=self.configs["checkpointing"],
                             fabric=self.fabric,
                             model=self.model,
-                            learning_dynamics_dataset=self.learning_dynamics_eval_dataset,
+                            dataset=self.learning_dynamics_eval_dataset,
                             compute_gradients=False,
                         )
                         save_learning_dynamics_states(

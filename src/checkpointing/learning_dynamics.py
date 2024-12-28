@@ -7,12 +7,11 @@ We save the learning dynamics states in a subdirectory of the checkpointing dire
 import os
 import re
 import torch
+from torch.nn import functional as F
+from torch.utils.data import DataLoader
+from huggingface_hub import upload_folder
 
 from src.model import Pico
-import torch.nn.functional as F
-from torch.utils.data import DataLoader
-
-from huggingface_hub import upload_folder
 
 # typing imports
 import torch.nn as nn
@@ -241,11 +240,9 @@ def compute_learning_dynamics_states(
     )
     extractor_dataloader = fabric.setup_dataloaders(dataloader)
 
-    # creating a copy of model with zero gradients
-    _model = Pico(model.config, model.fabric)
+    # Create a new model instance with same parameters but zero gradients
+    _model = Pico(model.config, fabric=fabric).to(fabric.device)
     _model.load_state_dict(model.state_dict())
-    if hasattr(model, "_forward_module"):
-        _model = fabric.setup_module(_model)
     _model.zero_grad()
 
     # setup forward hooks for the model to save activations and weights at each layer
