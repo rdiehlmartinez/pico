@@ -22,6 +22,9 @@ from src.config import CheckpointingConfig
 from typing import Dict, Any, Union, Tuple
 
 
+FABRIC_STATE_FILENAME = "fabric_state.pt"
+
+
 def load_checkpoint(
     checkpointing_config: CheckpointingConfig,
     checkpoint_step: Union[str, int],
@@ -68,7 +71,9 @@ def load_checkpoint(
         "_optimizer": optimizer,
         "_lr_scheduler": lr_scheduler,
     }
-    extra_state = fabric.load(fabric_checkpoint_path, state=checkpoint_state)
+
+    fabric_load_file = os.path.join(fabric_checkpoint_path, FABRIC_STATE_FILENAME)
+    extra_state = fabric.load(os.path.join(fabric_load_file), state=checkpoint_state)
 
     # NOTE: extra_state will contain any additional states that were saved in the checkpoint
     checkpoint_step = extra_state["_checkpoint_step"]
@@ -172,7 +177,9 @@ def save_checkpoint(
         "_lr_scheduler": lr_scheduler,
         "_checkpoint_step": checkpoint_step,
     }
-    fabric.save(fabric_checkpoint_path, checkpoint_state)
+
+    fabric_save_file = os.path.join(fabric_checkpoint_path, FABRIC_STATE_FILENAME)
+    fabric.save(fabric_save_file, checkpoint_state)
 
     if fabric.global_rank == 0:
         # Save config in fabric directory
