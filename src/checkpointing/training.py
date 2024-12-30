@@ -22,9 +22,6 @@ from src.config import CheckpointingConfig
 from typing import Dict, Any, Union, Tuple
 
 
-FABRIC_STATE_FILENAME = "fabric_state.pt"
-
-
 def load_checkpoint(
     checkpointing_config: CheckpointingConfig,
     checkpoint_step: Union[str, int],
@@ -103,7 +100,8 @@ def save_checkpoint(
     We save the following files:
     - HuggingFace model files (config.json, pytorch_model.bin)
     - Tokenizer files (vocab.json, merges.txt)
-    - Fabric-specific files (config.yaml, model.pt, optimizer.pt, training.pt)
+    - Fabric-specific files - fabric state of the model, optimizer, and lr_scheduler. If using
+      DeepSpeed, the checkpoint is saved in a subdirectory, otherwise it is saved in a single file.
 
     Note that the HuggingFace model files are saved at the step-specific checkpoint directory, while the
     Fabric-specific files are saved in a subdirectory. This is done to facilitate easier
@@ -118,13 +116,15 @@ def save_checkpoint(
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.checkpoints_dir}/
                 ├── step_{checkpoint_step}/
-                │   ├── config.json              # HuggingFace model config
-                │   ├── pytorch_model.bin        # HuggingFace model weights
-                │   ├── vocab.json               # Tokenizer vocab
-                │   ├── merges.txt               # Tokenizer merges
-                │   └── {checkpointing_config.fabric_checkpoint_dir}/ # Fabric-specific files
-                │      ├── config.yaml           # Full training config
-                │      └── checkpoint/           # Distributed model checkpoint files
+                │   ├── config.json                    # HuggingFace model config
+                │   ├── pytorch_model.bin              # HuggingFace model weights
+                │   ├── vocab.json                     # Tokenizer vocab
+                │   ├── merges.txt                     # Tokenizer merges
+                │   └── {checkpointing_config.fabric_checkpoint_dir}/  # Fabric-specific files
+                │       ├── config.yaml                # Full training config
+                │       └── checkpoint/                # Distributed model checkpoint files (if using DeepSpeed)
+                │           OR
+                │       └── checkpoint.pt              # Single checkpoint file (if using other strategies)
                 └── latest -> step_{checkpoint_step}/
 
     Args:
