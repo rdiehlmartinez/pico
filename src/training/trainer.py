@@ -285,11 +285,16 @@ class Trainer:
             gradient_accumulation_steps = self.configs[
                 "training"
             ].optimization.gradient_accumulation_steps
-            device_type = (
-                torch.cuda.get_device_name(self.fabric.device)
-                if torch.cuda.is_available() and "cuda" in str(self.fabric.device)
-                else "CPU"
-            )
+
+            device_type = ""
+            fabric_device = str(self.fabric.device)
+            if torch.cuda.is_available() and "cuda" in fabric_device:
+                device_type = torch.cuda.get_device_name(self.fabric.device)
+            elif torch.backends.mps.is_available() and "mps" in fabric_device:
+                device_type = "MPS"
+            else:
+                device_type = "CPU"
+
             self.log("=" * 50)
             self.log("✨ Training Configuration")
             self.log("=" * 50)
