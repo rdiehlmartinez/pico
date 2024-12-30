@@ -280,6 +280,10 @@ class Trainer:
         ########################################################
 
         if self.initial_batch_step < self.configs["training"].max_steps:
+            total_params = sum(p.numel() for p in self.model.parameters())
+            trainable_params = sum(
+                p.numel() for p in self.model.parameters() if p.requires_grad
+            )
             global_batch_size = self.configs["data"].dataloader.batch_size
             per_device_batch_size = self.train_dataloader.batch_size
             gradient_accumulation_steps = self.configs[
@@ -294,6 +298,9 @@ class Trainer:
             self.log("✨ Training Configuration")
             self.log("=" * 50)
             self.log(f"Starting from step: {self.initial_batch_step}")
+            self.log("Model Setup:")
+            self.log(f"└─ Total Parameters: {total_params:,}")
+            self.log(f"└─ Trainable Parameters: {trainable_params:,}")
             self.log("Distributed Setup:")
             self.log(f"└─ Number of Devices: {self.fabric.world_size}")
             self.log(f"└─ Device Type: {device_type}")
