@@ -72,7 +72,14 @@ def load_checkpoint(
         "_lr_scheduler": lr_scheduler,
     }
 
-    fabric_load_file = os.path.join(fabric_checkpoint_path, FABRIC_STATE_FILENAME)
+    if "deepspeed" not in str(fabric.strategy):
+        fabric_load_file = os.path.join(
+            fabric_checkpoint_path, checkpointing_config.fabric_checkpoint_filename
+        )
+    else:
+        # Deepspeed checkpoints create sub-directory with distributed checkpoint file
+        fabric_load_file = fabric_checkpoint_path
+
     extra_state = fabric.load(os.path.join(fabric_load_file), state=checkpoint_state)
 
     # NOTE: extra_state will contain any additional states that were saved in the checkpoint
@@ -178,7 +185,14 @@ def save_checkpoint(
         "_checkpoint_step": checkpoint_step,
     }
 
-    fabric_save_file = os.path.join(fabric_checkpoint_path, FABRIC_STATE_FILENAME)
+    if "deepspeed" not in str(fabric.strategy):
+        fabric_save_file = os.path.join(
+            fabric_checkpoint_path, checkpointing_config.fabric_checkpoint_filename
+        )
+    else:
+        # Deepspeed checkpoints create sub-directory with distributed checkpoint file
+        fabric_save_file = fabric_checkpoint_path
+
     fabric.save(fabric_save_file, checkpoint_state)
 
     if fabric.global_rank == 0:
