@@ -13,7 +13,7 @@ checkpointing:
   save_checkpoint_repo_id: "pico-lm/demo"
 
   training:
-    load_latest_checkpoint: true
+    auto_resume: true
   
   learning_dynamics:
     layer_suffixes: ["attention.v_proj", "attention.o_proj", "feed_forward.w_2", "feed_forward.w_1"]
