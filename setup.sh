@@ -125,7 +125,7 @@ fi
 if [ ! -d ".venv" ]; then
     echo "No virtual environment found. Creating one..."
     poetry config virtualenvs.in-project true
-    poetry install --with dev --no-root
+    poetry install --with dev 
     print_success "Poetry environment created successfully"
 else
     print_success "Poetry environment already exists"
@@ -150,11 +150,8 @@ print_success "Pre-commit initial run complete"
 print_section "Setup Status"
 if [ $ERRORS_FOUND -eq 0 ]; then
     print_success "Setup Complete! 🎉"
+    print_success "To activate the virtual environment, run: poetry shell"
 else
     print_warning "Setup completed with warnings! Please check the messages above."
     echo -e "${YELLOW}    Some features might not work as expected.${NC}"
 fi
-
-# Activate the virtual environment
-poetry shell
-

@@ -54,6 +54,7 @@ def run_paloma_evaluation(
     perplexity_counts = {}
 
     for sub_config in PALOMA_SUB_CONFIGS:
+        # NOTE: we only evaluate on the first 5 examples for each sub-config -- FIX THIS
         dataset = load_dataset("allenai/paloma", sub_config, split="val")["text"][:5]
 
         perplexity_result = perplexity.compute(

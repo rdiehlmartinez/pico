@@ -436,20 +436,20 @@ class Pico(nn.Module):
 
     def __init__(
         self,
-        config: Union["ModelConfig", "PicoHFConfig"],
+        model_config: Union["ModelConfig", "PicoHFConfig"],
         fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
-        self.config = config
+        self.config = model_config
         self.fabric = fabric
 
-        self.embedding_proj = nn.Embedding(config.vocab_size, config.d_model)
+        self.embedding_proj = nn.Embedding(self.config.vocab_size, self.config.d_model)
         self.layers = nn.ModuleList(
-            [PicoBlock(config, fabric) for _ in range(config.n_layers)]
+            [PicoBlock(self.config, self.fabric) for _ in range(self.config.n_layers)]
         )
-        self.output_norm = RMSNorm(config)
+        self.output_norm = RMSNorm(self.config)
         self.de_embedding_proj = nn.Linear(
-            config.d_model, config.vocab_size, bias=False
+            self.config.d_model, self.config.vocab_size, bias=False
         )
 
     def convert_to_hf_model(self) -> "PicoHF":

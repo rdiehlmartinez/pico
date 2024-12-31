@@ -18,7 +18,7 @@ from dataclasses import fields, is_dataclass
 from datetime import datetime
 import wandb
 from wandb.integration.lightning.fabric import WandbLogger
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, IterableDataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
@@ -29,7 +29,7 @@ from src.config import (
     DataConfig,
     ModelConfig,
     EvaluationConfig,
-    LoggingConfig,
+    MonitoringConfig,
     CheckpointingConfig,
 )
 
@@ -81,7 +81,7 @@ def initialize_configuration(
         ModelConfig,
         TrainingConfig,
         EvaluationConfig,
-        LoggingConfig,
+        MonitoringConfig,
         CheckpointingConfig,
     ],
 ]:
@@ -101,7 +101,7 @@ def initialize_configuration(
     model_config = ModelConfig()
     training_config = TrainingConfig()
     evaluation_config = EvaluationConfig()
-    logging_config = LoggingConfig()
+    monitoring_config = MonitoringConfig()
     checkpointing_config = CheckpointingConfig()
 
     if config_path:
@@ -114,8 +114,8 @@ def initialize_configuration(
         evaluation_config = _apply_config_overrides(
             evaluation_config, overrides.get("evaluation", {})
         )
-        logging_config = _apply_config_overrides(
-            logging_config, overrides.get("logging", {})
+        monitoring_config = _apply_config_overrides(
+            monitoring_config, overrides.get("monitoring", {})
         )
         checkpointing_config = _apply_config_overrides(
             checkpointing_config, overrides.get("checkpointing", {})
@@ -126,7 +126,7 @@ def initialize_configuration(
         "model": model_config,
         "training": training_config,
         "evaluation": evaluation_config,
-        "logging": logging_config,
+        "monitoring": monitoring_config,
         "checkpointing": checkpointing_config,
     }
 
@@ -185,6 +185,7 @@ def initialize_fabric(
         devices=training_config.fabric.num_devices,
         num_nodes=training_config.fabric.num_nodes,
         loggers=[experiment_tracker] if experiment_tracker is not None else None,
+        strategy=training_config.fabric.strategy,
     )
 
     fabric.launch()
@@ -199,7 +200,37 @@ def initialize_fabric(
 ########################################################
 
 
-def initialize_dataset(data_config: DataConfig):
+class ShardedIterableDataset(IterableDataset):
+    """
+    A super simple implementation of a sharded iterable dataset that enables DataParallelism
+    across multiple workers. Ensures that each worker gets a unique shard of the dataset.
+
+    NOTE: Also works fine if there is only one worker.
+    """
+
+    def __init__(self, dataset, rank, world_size):
+        self.dataset = dataset
+        self.rank = rank
+        self.world_size = world_size
+
+    def __iter__(self):
+        iterator = iter(self.dataset)
+        # NOTE: Start by skipping to this worker's shard
+        for _ in range(self.rank):
+            next(iterator)
+
+        # NOTE: Yield every world_size-th item
+        while True:
+            try:
+                yield next(iterator)
+                # Skip other workers' samples
+                for _ in range(self.world_size - 1):
+                    next(iterator)
+            except StopIteration:
+                break
+
+
+def initialize_dataset(data_config: DataConfig, fabric: L.Fabric):
     """Initialize dataset based on the given config.
 
     Feel free to add any more complicated dataset logic here as well.
@@ -208,10 +239,10 @@ def initialize_dataset(data_config: DataConfig):
         data_config: Configuration object containing dataset settings.
 
     Returns:
-        Dataset: Initialized dataset object.
+        ShardedIterableDataset: Initialized dataset object.
     """
-
-    return load_dataset(data_config.dataset.name, split="train", streaming=True)
+    base_dataset = load_dataset(data_config.dataset.name, split="train", streaming=True)
+    return ShardedIterableDataset(base_dataset, fabric.global_rank, fabric.world_size)
 
 
 def initialize_tokenizer(data_config: DataConfig):
@@ -229,7 +260,12 @@ def initialize_tokenizer(data_config: DataConfig):
     return AutoTokenizer.from_pretrained(data_config.tokenizer.name)
 
 
-def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
+def initialize_dataloader(
+    data_config: DataConfig,
+    training_config: TrainingConfig,
+    fabric: L.Fabric,
+    dataset: Dataset,
+):
     """Initialize the DataLoader for efficient batch processing.
 
     Creates a PyTorch DataLoader that handles batching and data loading for training.
@@ -241,6 +277,8 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
 
     Args:
         data_config: Configuration object containing dataloader settings.
+        training_config: Configuration object containing training settings.
+        fabric: A Lightning Fabric instance.
         dataset: A HuggingFace Dataset object containing tokenized text data.
             Expected to have 'input_ids' field in its items.
 
@@ -251,13 +289,17 @@ def initialize_dataloader(data_config: DataConfig, dataset: Dataset):
     def _collate_fn(batch):
         return {"input_ids": [entry["input_ids"] for entry in batch]}
 
+    sub_batch_size = data_config.dataloader.batch_size // (
+        fabric.world_size * training_config.optimization.gradient_accumulation_steps
+    )
+
     # NOTE: We use the sub-batch size for the dataloader, which is the full batch size
     # divided by the gradient accumulation steps. This ensures that the effective batch size
     # is correct.
 
     return DataLoader(
         dataset,
-        batch_size=data_config.dataloader.sub_batch_size,
+        batch_size=sub_batch_size,
         shuffle=False,  # Keep sequential for streaming datasets
         pin_memory=True,  # Speeds up transfer to GPU
         collate_fn=_collate_fn,
@@ -351,7 +393,7 @@ def initialize_lr_scheduler(
 
 ########################################################
 #
-# Logging
+# Experiment Monitoring (Logging, Experiment Tracking, etc.)
 #
 ########################################################
 
@@ -390,68 +432,34 @@ def _initialize_log_file(checkpointing_config: CheckpointingConfig) -> str:
     return log_file_path
 
 
-def initialize_logging(
-    logging_config: LoggingConfig, checkpointing_config: CheckpointingConfig
+def initialize_experiment_tracker(
+    monitoring_config: MonitoringConfig, checkpointing_config: CheckpointingConfig
 ):
-    """Initialize logging system with file, console, and optional experiment tracking.
+    """Initialize an experiment tracker.
 
-    Sets up a comprehensive logging system that includes:
-    1. File-based logging with timestamped files
-    2. Console output for real-time monitoring
-    3. Optional experiment tracking integration (pico by default supports Weights & Biases)
+    This function initializes an experiment tracker based on the configuration settings. Out of
+    the box, Pico supports Weights and Biases.
 
     Args:
-        logging_config: Configuration object containing logging settings.
+        monitoring_config: Configuration object containing monitoring settings.
         checkpointing_config: Configuration object containing checkpointing settings.
 
     Returns:
-        tuple: (logger, experiment_tracker)
-            - logger: Standard Python logger configured for file and console output
-            - experiment_tracker: Optional experiment tracking logger (e.g., WandbLogger)
+        Optional[WandbLogger]: An experiment tracker instance.
     """
-
-    # ---- Standard Local Logger ---- #
-
-    logger = logging.getLogger(__name__)
-    logger.setLevel(logging.INFO)
-
-    # Create file handler
-    log_file_path = _initialize_log_file(checkpointing_config)
-    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
-    file_handler.setLevel(logging.INFO)
-
-    # Create formatter and add it to the handler
-    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
-    file_handler.setFormatter(formatter)
-
-    # Add the handler to the logger
-    logger.addHandler(file_handler)
-
-    # Add a stream handler for console output
-    stream_handler = logging.StreamHandler()
-    stream_handler.setLevel(logging.INFO)
-    stream_handler.setFormatter(formatter)
-    logger.addHandler(stream_handler)
-
-    # ---- Third Party Loggers aka. Experiment Trackers ----
-
-    # NOTE: Out-of-the-box, Pico supports Weights and Biases.
-    # Add whatever other experiment trackers here that you want to use here.
+    # NOTE: Add whatever other experiment trackers here that you want to use here.
 
     experiment_tracker = None
-    if logging_config.experiment_tracker == "wandb":
+    if monitoring_config.experiment_tracker.framework == "wandb":
         assert (
-            logging_config.wandb_project is not None
+            monitoring_config.experiment_tracker.wandb_project is not None
         ), "Wandb project must be provided if wandb is to be used."
         assert (
-            logging_config.wandb_entity is not None
+            monitoring_config.experiment_tracker.wandb_entity is not None
         ), "Wandb entity must be provided if wandb is to be used."
 
         _run_id = None
-        if (
-            checkpointing_config.training.load_checkpoint_path
-            or checkpointing_config.training.load_latest_checkpoint
-        ):
+        if checkpointing_config.training.auto_resume:
             # If we are loading a checkpoint, we can try to find the run id of the previous run
             previous_runs = wandb.Api().runs(
                 path="pico-lm/pico",
@@ -464,20 +472,65 @@ def initialize_logging(
                 pass
 
         experiment_tracker = WandbLogger(
-            project=logging_config.wandb_project,
-            entity=logging_config.wandb_entity,
+            project=monitoring_config.experiment_tracker.wandb_project,
+            entity=monitoring_config.experiment_tracker.wandb_entity,
             id=_run_id,
             name=checkpointing_config.run_name,
         )
     elif (
-        logging_config.experiment_tracker is not None
-        and logging_config.experiment_tracker != ""
+        monitoring_config.experiment_tracker.framework is not None
+        and monitoring_config.experiment_tracker.framework != ""
     ):
         raise ValueError(
-            f"Invalid experiment tracker: {logging_config.experiment_tracker}"
+            f"Invalid experiment tracker: {monitoring_config.experiment_tracker.framework}"
         )
 
-    return logger, experiment_tracker
+    return experiment_tracker
+
+
+def initialize_logging(
+    monitoring_config: MonitoringConfig,
+    checkpointing_config: CheckpointingConfig,
+    fabric: L.Fabric,
+):
+    """Initialize logging system with default logging, to file and console.
+
+    The default logging system uses a file handler and a stream handler.
+
+    Args:
+        monitoring_config: Configuration object containing monitoring settings.
+        checkpointing_config: Configuration object containing checkpointing settings.
+
+    Returns:
+        logger: Standard Python logger configured for file and console output
+    """
+
+    # ---- Standard Local Logger ---- #
+    if fabric.global_rank != 0:
+        return
+
+    logger = logging.getLogger(__name__)
+    logger.setLevel(logging.INFO)
+
+    # Create file handler
+    log_file_path = _initialize_log_file(checkpointing_config)
+    file_handler = logging.FileHandler(log_file_path, encoding="utf-8")
+    file_handler.setLevel(monitoring_config.logging.log_level)
+
+    # Create formatter and add it to the handler
+    formatter = logging.Formatter("%(asctime)s - %(levelname)s - %(message)s")
+    file_handler.setFormatter(formatter)
+
+    # Add the handler to the logger
+    logger.addHandler(file_handler)
+
+    # Add a stream handler for console output
+    stream_handler = logging.StreamHandler()
+    stream_handler.setLevel(monitoring_config.logging.log_level)
+    stream_handler.setFormatter(formatter)
+    logger.addHandler(stream_handler)
+
+    return logger
 
 
 ########################################################
@@ -487,7 +540,9 @@ def initialize_logging(
 ########################################################k
 
 
-def initialize_checkpointing(checkpointing_config: CheckpointingConfig):
+def initialize_checkpointing(
+    checkpointing_config: CheckpointingConfig, fabric: L.Fabric
+):
     """Initialize model checkpointing functionality.
 
     Sets up the infrastructure for saving model checkpoints, with support for
@@ -512,6 +567,9 @@ def initialize_checkpointing(checkpointing_config: CheckpointingConfig):
         - Creates a branch named after the run
         - Sets up local repository for pushing checkpoints
     """
+
+    if fabric.global_rank != 0:
+        return
 
     huggingface_repo_id = checkpointing_config.save_checkpoint_repo_id
     if huggingface_repo_id is None:

@@ -21,6 +21,7 @@ transformers = "^4.45.2"
 pre-commit = "^4.0.1"
 torch = "^2.5.1"
 evaluate = "^0.4.3"
+deepspeed = "^0.16.2"
 
 [tool.poetry.group.dev.dependencies]
 ipykernel = "^6.29.5"

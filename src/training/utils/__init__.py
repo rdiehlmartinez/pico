@@ -13,6 +13,7 @@ from .initialization import (
     initialize_dataloader,
     initialize_lr_scheduler,
     initialize_checkpointing,
+    initialize_experiment_tracker,
     initialize_logging,
     initialize_optimizer,
 )
