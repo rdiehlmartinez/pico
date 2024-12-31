@@ -68,7 +68,16 @@ def load_checkpoint(
         "_optimizer": optimizer,
         "_lr_scheduler": lr_scheduler,
     }
-    extra_state = fabric.load(fabric_checkpoint_path, state=checkpoint_state)
+
+    if "deepspeed" not in str(fabric.strategy):
+        fabric_load_file = os.path.join(
+            fabric_checkpoint_path, checkpointing_config.fabric_checkpoint_filename
+        )
+    else:
+        # Deepspeed checkpoints create sub-directory with distributed checkpoint file
+        fabric_load_file = fabric_checkpoint_path
+
+    extra_state = fabric.load(os.path.join(fabric_load_file), state=checkpoint_state)
 
     # NOTE: extra_state will contain any additional states that were saved in the checkpoint
     checkpoint_step = extra_state["_checkpoint_step"]
@@ -91,7 +100,8 @@ def save_checkpoint(
     We save the following files:
     - HuggingFace model files (config.json, pytorch_model.bin)
     - Tokenizer files (vocab.json, merges.txt)
-    - Fabric-specific files (config.yaml, model.pt, optimizer.pt, training.pt)
+    - Fabric-specific files - fabric state of the model, optimizer, and lr_scheduler. If using
+      DeepSpeed, the checkpoint is saved in a subdirectory, otherwise it is saved in a single file.
 
     Note that the HuggingFace model files are saved at the step-specific checkpoint directory, while the
     Fabric-specific files are saved in a subdirectory. This is done to facilitate easier
@@ -106,13 +116,15 @@ def save_checkpoint(
         └── {checkpointing_config.run_name}/
             └── {checkpointing_config.checkpoints_dir}/
                 ├── step_{checkpoint_step}/
-                │   ├── config.json              # HuggingFace model config
-                │   ├── pytorch_model.bin        # HuggingFace model weights
-                │   ├── vocab.json               # Tokenizer vocab
-                │   ├── merges.txt               # Tokenizer merges
-                │   └── {checkpointing_config.fabric_checkpoint_dir}/ # Fabric-specific files
-                │      ├── config.yaml           # Full training config
-                │      └── checkpoint/           # Distributed model checkpoint files
+                │   ├── config.json                    # HuggingFace model config
+                │   ├── pytorch_model.bin              # HuggingFace model weights
+                │   ├── vocab.json                     # Tokenizer vocab
+                │   ├── merges.txt                     # Tokenizer merges
+                │   └── {checkpointing_config.fabric_checkpoint_dir}/  # Fabric-specific files
+                │       ├── config.yaml                # Full training config
+                │       └── checkpoint/                # Distributed model checkpoint files (if using DeepSpeed)
+                │           OR
+                │       └── checkpoint.pt              # Single checkpoint file (if using other strategies)
                 └── latest -> step_{checkpoint_step}/
 
     Args:
@@ -172,7 +184,16 @@ def save_checkpoint(
         "_lr_scheduler": lr_scheduler,
         "_checkpoint_step": checkpoint_step,
     }
-    fabric.save(fabric_checkpoint_path, checkpoint_state)
+
+    if "deepspeed" not in str(fabric.strategy):
+        fabric_save_file = os.path.join(
+            fabric_checkpoint_path, checkpointing_config.fabric_checkpoint_filename
+        )
+    else:
+        # Deepspeed checkpoints create sub-directory with distributed checkpoint file
+        fabric_save_file = fabric_checkpoint_path
+
+    fabric.save(fabric_save_file, checkpoint_state)
 
     if fabric.global_rank == 0:
         # Save config in fabric directory
