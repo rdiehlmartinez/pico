@@ -14,25 +14,6 @@ from datasets.utils.logging import disable_progress_bar, enable_progress_bar
 # typing imports
 from src.config.evaluation_config import PalomaEvaluationConfig
 
-PALOMA_SUB_CONFIGS = [
-    "4chan_meta_sep",
-    "c4_100_domains",
-    "c4_en",
-    "dolma_100_programing_languages",
-    "dolma_100_subreddits",
-    "dolma-v1_5",
-    "falcon-refinedweb",
-    "gab",
-    "m2d2_s2orc_unsplit",
-    "m2d2_wikipedia_unsplit",
-    "manosphere_meta_sep",
-    "mc4",
-    "ptb",
-    "redpajama",
-    "twitterAAE_HELM_fixed",
-    "wikitext_103",
-]
-
 
 def run_paloma_evaluation(
     model_path: str,
@@ -50,29 +31,17 @@ def run_paloma_evaluation(
     disable_progress_bar()
 
     perplexity = evaluate.load("pico-lm/perplexity")
-    perplexity_results = {}
-    perplexity_counts = {}
+    dataset = load_dataset(paloma_config.dataset_name, split="val")["text"]
+    perplexity_result = perplexity.compute(
+        model_id=model_path,
+        predictions=dataset,
+        add_start_token=False,
+        max_length=paloma_config.max_length,
+        batch_size=paloma_config.batch_size,
+        trust_remote_code=True,
+    )
 
-    for sub_config in PALOMA_SUB_CONFIGS:
-        # NOTE: we only evaluate on the first 5 examples for each sub-config -- FIX THIS
-        dataset = load_dataset("allenai/paloma", sub_config, split="val")["text"][:5]
-
-        perplexity_result = perplexity.compute(
-            model_id=model_path,
-            predictions=dataset,
-            add_start_token=False,
-            max_length=paloma_config.max_length,
-            batch_size=paloma_config.batch_size,
-            trust_remote_code=True,
-        )
-
-        perplexity_results[sub_config] = perplexity_result["mean_perplexity"]
-        perplexity_counts[sub_config] = len(dataset)
-
-    final_perplexity = sum(
-        perplexity_results[sub_config] * perplexity_counts[sub_config]
-        for sub_config in PALOMA_SUB_CONFIGS
-    ) / sum(perplexity_counts.values())
+    mean_perplexity = perplexity_result["mean_perplexity"]
 
     enable_progress_bar()
-    return final_perplexity
+    return mean_perplexity

@@ -7,7 +7,7 @@ data:
     batch_size: &mini_batch_size 16
   
 checkpointing:
-  run_name: "demo-2"
+  run_name: "demo-1"
   save_every_n_steps: 50
 
   save_checkpoint_repo_id: "pico-lm/demo"
@@ -21,7 +21,7 @@ checkpointing:
 
 evaluation: 
   paloma:
-    batch_size: 8
+    batch_size: 32
 
 monitoring:
   logging:
