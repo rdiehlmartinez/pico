@@ -12,7 +12,7 @@ from .initialization import (
     initialize_tokenizer,
     initialize_dataloader,
     initialize_lr_scheduler,
-    initialize_checkpointing,
+    initialize_hf_checkpointing,
     initialize_experiment_tracker,
     initialize_logging,
     initialize_optimizer,

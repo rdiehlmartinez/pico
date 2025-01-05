@@ -33,7 +33,7 @@ from src.training.utils import (
     initialize_tokenizer,
     initialize_dataloader,
     initialize_lr_scheduler,
-    initialize_checkpointing,
+    initialize_hf_checkpointing,
     initialize_experiment_tracker,
     initialize_logging,
     initialize_optimizer,
@@ -120,10 +120,12 @@ class Trainer:
         self.model, self.optimizer = self.fabric.setup(self.model, self.optimizer)
         self.train_dataloader = self.fabric.setup_dataloaders(self.train_dataloader)
 
-        # Setup Checkpointing
-        initialize_checkpointing(
-            checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
-        )
+        # Setup HuggingFace Checkpointing
+        if self.configs["checkpointing"].save_checkpoint_repo_id is not None:
+            initialize_hf_checkpointing(
+                checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
+            )
+
         self.fabric.barrier()
 
         ########################################################

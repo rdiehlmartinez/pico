@@ -249,11 +249,12 @@ def compute_learning_dynamics_states(
     state_extractor = CheckpointStateExtractor(
         checkpointing_config.learning_dynamics, fabric, _model
     )
-    checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
-        state_extractor.extract_states(
-            extractor_dataloader, compute_gradients=compute_gradients
+    with fabric.autocast():
+        checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
+            state_extractor.extract_states(
+                extractor_dataloader, compute_gradients=compute_gradients
+            )
         )
-    )
 
     return {
         "checkpoint_activations": checkpoint_activations,

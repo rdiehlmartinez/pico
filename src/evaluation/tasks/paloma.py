@@ -31,7 +31,9 @@ def run_paloma_evaluation(
     disable_progress_bar()
 
     perplexity = evaluate.load("pico-lm/perplexity")
-    dataset = load_dataset(paloma_config.dataset_name, split="val")["text"]
+    dataset = load_dataset(
+        paloma_config.dataset_name, split=paloma_config.dataset_split
+    )["text"]
     perplexity_result = perplexity.compute(
         model_id=model_path,
         predictions=dataset,
