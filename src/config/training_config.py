@@ -12,7 +12,7 @@ from ._constants import GRADIENT_ACCUMULATION_STEPS
 class FabricConfig:
     num_nodes: int = 1
     num_devices: int = 1
-    precision: str = "16-mixed"
+    precision: str = "bf16-mixed"
     accelerator: str = "cuda"
     strategy: str = "deepspeed_stage_2"
 
@@ -21,11 +21,11 @@ class FabricConfig:
 class OptimizationConfig:
     # Optimizer
     optimizer: str = "adamw"
-    lr: float = 1e-5
+    lr: float = 3e-4
 
     # Learning Rate Scheduler
     lr_scheduler: str = "linear_with_warmup"
-    lr_warmup_steps: int = 50_000
+    lr_warmup_steps: int = 2500
 
     # Gradient Accumulation
     gradient_accumulation_steps: int = GRADIENT_ACCUMULATION_STEPS
@@ -35,5 +35,4 @@ class OptimizationConfig:
 class TrainingConfig:
     fabric: FabricConfig = field(default_factory=FabricConfig)
     optimization: OptimizationConfig = field(default_factory=OptimizationConfig)
-    strategy: str = "deepspeed"
     max_steps: int = 200_000

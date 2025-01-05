@@ -4,7 +4,7 @@
 
 data:
   dataloader:
-    batch_size: &mini_batch_size 16
+    batch_size: 32
   
 checkpointing:
   run_name: "demo-1"
@@ -12,12 +12,12 @@ checkpointing:
 
   save_checkpoint_repo_id: "pico-lm/demo"
 
-  training:
-    auto_resume: true
-  
   learning_dynamics:
-    layer_suffixes: ["attention.v_proj", "attention.o_proj", "feed_forward.w_2", "feed_forward.w_1"]
-    batch_size: 8
+    batch_size: 16
+
+model:
+    d_model: 96
+    activation_hidden_dim: 384
 
 evaluation: 
   paloma:
@@ -28,7 +28,6 @@ monitoring:
     log_every_n_steps: 10
 
 training:
-  learning_rate: 0.001
   max_steps: 100
 
   optimization:
