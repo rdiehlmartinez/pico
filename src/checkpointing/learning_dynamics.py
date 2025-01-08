@@ -244,17 +244,18 @@ def compute_learning_dynamics_states(
     _model = Pico(model.config, fabric=fabric).to(fabric.device)
     _model.load_state_dict(model.state_dict())
     _model.zero_grad()
+    _model = _model.to(dtype=fabric.strategy.precision._desired_dtype)
 
     # setup forward hooks for the model to save activations and weights at each layer
     state_extractor = CheckpointStateExtractor(
         checkpointing_config.learning_dynamics, fabric, _model
     )
-    with fabric.autocast():
-        checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
-            state_extractor.extract_states(
-                extractor_dataloader, compute_gradients=compute_gradients
-            )
+
+    checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
+        state_extractor.extract_states(
+            extractor_dataloader, compute_gradients=compute_gradients
         )
+    )
 
     return {
         "checkpoint_activations": checkpoint_activations,
@@ -351,7 +352,7 @@ def save_learning_dynamics_states(
             folder_path=learning_dynamics_path,
             path_in_repo=learning_dynamics_dir,
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Learning Dynamics Datas -- Step {checkpoint_step}",
+            commit_message=f"Saving Learning Dynamics Data ({prefix}) -- Step {checkpoint_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )

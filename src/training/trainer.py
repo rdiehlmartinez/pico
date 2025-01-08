@@ -282,41 +282,7 @@ class Trainer:
         ########################################################
 
         if self.initial_batch_step < self.configs["training"].max_steps:
-            total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(
-                p.numel() for p in self.model.parameters() if p.requires_grad
-            )
-            global_batch_size = self.configs["data"].dataloader.batch_size
-            per_device_batch_size = self.train_dataloader.batch_size
-            gradient_accumulation_steps = self.configs[
-                "training"
-            ].optimization.gradient_accumulation_steps
-
-            device_type = ""
-            fabric_device = str(self.fabric.device)
-            if torch.cuda.is_available() and "cuda" in fabric_device:
-                device_type = torch.cuda.get_device_name(self.fabric.device)
-            elif torch.backends.mps.is_available() and "mps" in fabric_device:
-                device_type = "MPS"
-            else:
-                device_type = "CPU"
-
-            self.log("=" * 50)
-            self.log("✨ Training Configuration")
-            self.log("=" * 50)
-            self.log(f"Starting from step: {self.initial_batch_step}")
-            self.log("Model Setup:")
-            self.log(f"└─ Total Parameters: {total_params:,}")
-            self.log(f"└─ Trainable Parameters: {trainable_params:,}")
-            self.log("Distributed Setup:")
-            self.log(f"└─ Number of Devices: {self.fabric.world_size}")
-            self.log(f"└─ Device Type: {device_type}")
-            self.log("Batch Size Configuration:")
-            self.log(f"└─ Global Batch Size: {global_batch_size}")
-            self.log(f"└─ Per Device Batch Size: {per_device_batch_size}")
-            self.log(f"└─ Gradient Accumulation Steps: {gradient_accumulation_steps}")
-            self.log("=" * 50)
-
+            self._log_training_configuration()
             final_step = self._training_loop()
         else:
             final_step = self.initial_batch_step
@@ -648,6 +614,43 @@ class Trainer:
                 prefix = "└──" if i == len(evaluation_results) - 1 else "├──"
                 self.log(f"{prefix} {metric}: {result}")
                 self.fabric.log(f"eval/{metric}", result, step=batch_step)
+
+    def _log_training_configuration(self):
+        """Log training configuration details including model, hardware, and batch settings."""
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(
+            p.numel() for p in self.model.parameters() if p.requires_grad
+        )
+        global_batch_size = self.configs["data"].dataloader.batch_size
+        per_device_batch_size = self.train_dataloader.batch_size
+        gradient_accumulation_steps = self.configs[
+            "training"
+        ].optimization.gradient_accumulation_steps
+
+        device_type = ""
+        fabric_device = str(self.fabric.device)
+        if torch.cuda.is_available() and "cuda" in fabric_device:
+            device_type = torch.cuda.get_device_name(self.fabric.device)
+        elif torch.backends.mps.is_available() and "mps" in fabric_device:
+            device_type = "MPS (Apple Silicon)"
+        else:
+            device_type = "CPU"
+
+        self.log("=" * 50)
+        self.log("✨ Training Configuration")
+        self.log("=" * 50)
+        self.log(f"Starting from step: {self.initial_batch_step}")
+        self.log("Model Setup:")
+        self.log(f"└─ Total Parameters: {total_params:,}")
+        self.log(f"└─ Trainable Parameters: {trainable_params:,}")
+        self.log("Distributed Setup:")
+        self.log(f"└─ Number of Devices: {self.fabric.world_size}")
+        self.log(f"└─ Device Type: {device_type}")
+        self.log("Batch Size Configuration:")
+        self.log(f"└─ Global Batch Size: {global_batch_size}")
+        self.log(f"└─ Per Device Batch Size: {per_device_batch_size}")
+        self.log(f"└─ Gradient Accumulation Steps: {gradient_accumulation_steps}")
+        self.log("=" * 50)
 
     @rank_zero_only
     def log(self, msg: str, level: int = logging.INFO) -> None:
