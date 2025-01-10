@@ -15,17 +15,20 @@ libraries/frameworks.
 """
 
 import os
+import torch
 from .tasks.paloma import run_paloma_evaluation
 
 # typing imports
 from src.config import EvaluationConfig, CheckpointingConfig
 from lightning.fabric import Fabric
+from torch import nn
 
 
 def run_evaluation(
     evaluation_config: EvaluationConfig,
     checkpointing_config: CheckpointingConfig,
     fabric: Fabric,
+    model: nn.Module,
 ) -> None:
     """Run model evaluation using specified metrics in `evaluation_config`.
 
@@ -46,6 +49,7 @@ def run_evaluation(
                 - limit_eval_examples (Optional[int]): Number of examples to evaluate
         checkpointing_config (CheckpointingConfig): Configuration object containing:
         fabric (Fabric): Lightning Fabric instance
+        model (nn.Module): Original model instance
 
     Returns:
         Dict[str, float]: Dictionary mapping metric names to their values
@@ -64,6 +68,8 @@ def run_evaluation(
         )
 
     """
+
+    model.to("cpu")  # Offloading model to CPU
 
     if fabric.global_rank != 0:
         # NOTE: by default we only want to run evaluation on a single process; evaluation tasks
@@ -88,5 +94,8 @@ def run_evaluation(
             raise ValueError(f"Metric {metric} not supported")
 
         evaluation_results[metric] = paloma_result
+
+    torch.cuda.empty_cache()
+    model.to(fabric.device)
 
     return evaluation_results

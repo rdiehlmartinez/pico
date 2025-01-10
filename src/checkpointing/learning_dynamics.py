@@ -97,7 +97,7 @@ class CheckpointStateExtractor:
                 outputs, _ = self.model(input_ids)
                 outputs = outputs.transpose(1, 2)
                 loss = F.cross_entropy(outputs, labels)
-                self.fabric.backward(loss)
+                loss.backward()
 
         # cleanup forward hooks - NOTE this is not strictly necessary, since self.model is a
         # deepcopy of the original model; but it is good practice to remove the hooks after the
@@ -242,8 +242,10 @@ def compute_learning_dynamics_states(
     extractor_dataloader = fabric.setup_dataloaders(dataloader)
 
     # Create a new model instance with same parameters but zero gradients
-    _model = Pico(model.config, fabric=fabric).to(fabric.device)
+    _model = Pico(model.config, fabric=fabric)
     _model.load_state_dict(model.state_dict())
+    model.to("cpu")  # Offloading model to CPU
+    _model.to(fabric.device)
     _model.zero_grad()
 
     # setup forward hooks for the model to save activations and weights at each layer
@@ -263,6 +265,10 @@ def compute_learning_dynamics_states(
                 extractor_dataloader, compute_gradients=compute_gradients
             )
         )
+
+    del _model
+    torch.cuda.empty_cache()
+    model.to(fabric.device)
 
     return {
         "checkpoint_activations": checkpoint_activations,

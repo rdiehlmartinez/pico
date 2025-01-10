@@ -241,6 +241,7 @@ class Trainer:
                     evaluation_config=self.configs["evaluation"],
                     checkpointing_config=self.configs["checkpointing"],
                     fabric=self.fabric,
+                    model=self.model,
                 )
                 self._log_evaluation_results(
                     evaluation_results, self.initial_batch_step
@@ -262,6 +263,7 @@ class Trainer:
                         evaluation_config=self.configs["evaluation"],
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
+                        model=self.model,
                     )
                     self._log_evaluation_results(
                         evaluation_results, self.initial_batch_step
@@ -331,6 +333,7 @@ class Trainer:
                     evaluation_config=self.configs["evaluation"],
                     checkpointing_config=self.configs["checkpointing"],
                     fabric=self.fabric,
+                    model=self.model,
                 )
                 self._log_evaluation_results(evaluation_results, final_step)
                 save_evaluation_results(
@@ -535,6 +538,7 @@ class Trainer:
                         evaluation_config=self.configs["evaluation"],
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
+                        model=self.model,
                     )
                     if evaluation_results is not None:
                         self._log_evaluation_results(evaluation_results, batch_step)
