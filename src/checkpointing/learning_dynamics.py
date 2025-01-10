@@ -21,6 +21,7 @@ from transformers import PreTrainedTokenizerBase
 from src.config import CheckpointingConfig
 from src.config.checkpointing_config import LearningDynamicsCheckpointingConfig
 from lightning.fabric import Fabric
+from lightning.fabric.strategies import DeepSpeedStrategy
 
 
 class CheckpointStateExtractor:
@@ -244,18 +245,24 @@ def compute_learning_dynamics_states(
     _model = Pico(model.config, fabric=fabric).to(fabric.device)
     _model.load_state_dict(model.state_dict())
     _model.zero_grad()
-    _model = _model.to(dtype=fabric.strategy.precision._desired_dtype)
 
     # setup forward hooks for the model to save activations and weights at each layer
     state_extractor = CheckpointStateExtractor(
         checkpointing_config.learning_dynamics, fabric, _model
     )
 
-    checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
-        state_extractor.extract_states(
-            extractor_dataloader, compute_gradients=compute_gradients
+    if isinstance(fabric.strategy, DeepSpeedStrategy):
+        # Deepspeed doesn't automatically autocast with fabric - fabric.autocast() returns a
+        # null context manager. So we need to manually set the dtype of the model to the correct
+        # dtype of the strategy.
+        _model.to(dtype=fabric.strategy.precision._desired_dtype)
+
+    with fabric.autocast():
+        checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
+            state_extractor.extract_states(
+                extractor_dataloader, compute_gradients=compute_gradients
+            )
         )
-    )
 
     return {
         "checkpoint_activations": checkpoint_activations,
