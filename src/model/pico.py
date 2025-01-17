@@ -320,15 +320,16 @@ class Attention(nn.Module):
             backend = SDPBackend.MATH
 
         with sdpa_kernel(backends=[backend]):
-            output = F.scaled_dot_product_attention(
+            attn_output = F.scaled_dot_product_attention(
                 queries,
                 keys,
                 values,
                 attn_mask=mask,
                 enable_gqa=True if self.n_rep > 1 else False,
             )
-        output = output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
-        output = self.o_proj(output)
+
+        attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
+        output = self.o_proj(attn_output)
 
         return output, (cached_keys, cached_values)
 
