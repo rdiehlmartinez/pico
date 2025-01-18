@@ -14,7 +14,6 @@ class FabricConfig:
     num_devices: int = 1
     precision: str = "bf16-mixed"
     accelerator: str = "cuda"
-    strategy: str = "deepspeed_stage_2"
 
 
 @dataclass

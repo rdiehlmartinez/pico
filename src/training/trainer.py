@@ -352,9 +352,14 @@ class Trainer:
 
         # Cleanup distributed training
         self.fabric.barrier()
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
-            self.fabric.barrier()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+
+            del self.train_dataloader  # NOTE: shutting down worker nodes
+
+        self.fabric.barrier()
 
     def _training_loop(self) -> int:
         """Execute the main training loop.
@@ -409,10 +414,6 @@ class Trainer:
             _input_ids = torch.tensor(sub_batch["input_ids"], device=self.fabric.device)
             input_ids = _input_ids[:, :-1]
             labels = _input_ids[:, 1:]
-
-            # NOTE: CHECKING DATA CONSISTENCY ACROSS DEVICES
-            if sub_batch_step == 200:
-                print(f"Rank {self.fabric.global_rank} -- {_input_ids.sum()}")
 
             if should_store_training_batch:
                 gathered_input_ids = self.fabric.all_gather(_input_ids)

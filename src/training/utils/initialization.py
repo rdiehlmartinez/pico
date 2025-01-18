@@ -180,13 +180,27 @@ def initialize_fabric(
         >>> fabric = initialize_fabric(training_config, wandb_logger)
     """
 
+    total_devices = (
+        training_config.fabric.num_devices * training_config.fabric.num_nodes
+    )
+
+    if total_devices > 1:
+        strategy = "deepspeed_stage_2"
+    else:
+        strategy = "auto"  # Sets up SingleDevice Strategy by default
+
+    # NOTE: The strategy is set to use either DeepSpeed (Zero Stage 2) on multi-GPU,
+    # or SingleDevice Strategy on single-GPU set ups. If you'd like to use a different strategy,
+    # you can change the strategy flag in the fabric initialization, but be aware that this might
+    # cause issues with checkpointing, evaluation, etc.
+
     fabric = L.Fabric(
         accelerator=training_config.fabric.accelerator,
         precision=training_config.fabric.precision,
         devices=training_config.fabric.num_devices,
         num_nodes=training_config.fabric.num_nodes,
         loggers=[experiment_tracker] if experiment_tracker is not None else None,
-        strategy=training_config.fabric.strategy,
+        strategy=strategy,
     )
 
     fabric.launch()
