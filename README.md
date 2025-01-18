@@ -151,7 +151,7 @@ Apache 2.0 License
 - GitHub: [rdiehlmartinez/pico](https://github.com/rdiehlmartinez/pico)
 - Author: [Richard Diehl Martinez](https://richarddiehlmartinez.com)
 
-## ���� Citation
+## Citation
 
 If you use Pico in your research, please cite:
 
