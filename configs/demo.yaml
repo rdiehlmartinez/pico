@@ -38,4 +38,3 @@ training:
   
   fabric:
     num_devices: 1
-    strategy: "auto"

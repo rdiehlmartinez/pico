@@ -3,15 +3,15 @@
 # Refer to the config files in the configs/ directory to see all the available options
 
 checkpointing:
-  run_name: "pico-tiny-1"
-  save_checkpoint_repo_id: "pico-lm/pico-tiny"
+  run_name: "pico-medium-1"
+  save_checkpoint_repo_id: "pico-lm/pico-medium"
 
   learning_dynamics:
     batch_size: 256
 
 model:
-    d_model: 96
-    activation_hidden_dim: 384
+    d_model: 768
+    activation_hidden_dim: 3072
 
 training:
   optimization:
