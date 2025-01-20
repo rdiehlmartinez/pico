@@ -297,9 +297,9 @@ def compute_learning_dynamics_states(
     model.to(fabric.device)
 
     return {
-        "checkpoint_activations": checkpoint_activations,
-        "checkpoint_weights": checkpoint_weights,
-        "checkpoint_gradients": checkpoint_gradients,
+        "activations": checkpoint_activations,
+        "weights": checkpoint_weights,
+        "gradients": checkpoint_gradients,
     }
 
 
