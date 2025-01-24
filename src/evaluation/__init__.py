@@ -15,17 +15,20 @@ libraries/frameworks.
 """
 
 import os
+import torch
 from .tasks.paloma import run_paloma_evaluation
 
 # typing imports
 from src.config import EvaluationConfig, CheckpointingConfig
 from lightning.fabric import Fabric
+from torch import nn
 
 
 def run_evaluation(
     evaluation_config: EvaluationConfig,
     checkpointing_config: CheckpointingConfig,
     fabric: Fabric,
+    model: nn.Module,
 ) -> None:
     """Run model evaluation using specified metrics in `evaluation_config`.
 
@@ -46,6 +49,7 @@ def run_evaluation(
                 - limit_eval_examples (Optional[int]): Number of examples to evaluate
         checkpointing_config (CheckpointingConfig): Configuration object containing:
         fabric (Fabric): Lightning Fabric instance
+        model (nn.Module): Original model instance
 
     Returns:
         Dict[str, float]: Dictionary mapping metric names to their values
@@ -65,28 +69,37 @@ def run_evaluation(
 
     """
 
-    if fabric.global_rank != 0:
-        # NOTE: by default we only want to run evaluation on a single process; evaluation tasks
-        # will typically be run using third-party libraries. These libraries should be in charge of
-        # handling the distributed evaluation.
-        return None
+    fabric.barrier()
 
-    if checkpointing_config.evaluation.load_checkpoint_path is not None:
-        model_path = checkpointing_config.evaluation.load_checkpoint_path
-    else:
-        run_name = checkpointing_config.run_name
-        model_path = f"{os.getcwd()}/{checkpointing_config.runs_dir}/{run_name}/{checkpointing_config.checkpoints_dir}/latest"
-    os.makedirs(model_path, exist_ok=True)
+    model.to("cpu")  # Offloading model to CPU
 
     evaluation_results = {}
 
-    for metric in evaluation_config.metrics:
-        # NOTE: add your own metrics here
-        if metric == "paloma":
-            paloma_result = run_paloma_evaluation(model_path, evaluation_config.paloma)
+    # NOTE: Evaluation is only run on first processes to enable third-party evaluation libraries
+    # to determine how to handle distributed evaluation.
+    if fabric.global_rank == 0:
+        if checkpointing_config.evaluation.load_checkpoint_path is not None:
+            model_path = checkpointing_config.evaluation.load_checkpoint_path
         else:
-            raise ValueError(f"Metric {metric} not supported")
+            run_name = checkpointing_config.run_name
+            model_path = f"{os.getcwd()}/{checkpointing_config.runs_dir}/{run_name}/{checkpointing_config.checkpoints_dir}/latest"
+        os.makedirs(model_path, exist_ok=True)
 
-        evaluation_results[metric] = paloma_result
+        for metric in evaluation_config.metrics:
+            # NOTE: add your own metrics here
+            if metric == "paloma":
+                paloma_result = run_paloma_evaluation(
+                    model_path, evaluation_config.paloma
+                )
+            else:
+                raise ValueError(f"Metric {metric} not supported")
+
+            evaluation_results[metric] = paloma_result
+
+    torch.cuda.empty_cache()
+
+    fabric.barrier()
+
+    model.to(fabric.device)
 
     return evaluation_results

@@ -7,9 +7,12 @@ We save the learning dynamics states in a subdirectory of the checkpointing dire
 import os
 import re
 import torch
+import torch.optim as optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 from huggingface_hub import upload_folder
+
+import deepspeed
 
 from src.model import Pico
 
@@ -21,6 +24,13 @@ from transformers import PreTrainedTokenizerBase
 from src.config import CheckpointingConfig
 from src.config.checkpointing_config import LearningDynamicsCheckpointingConfig
 from lightning.fabric import Fabric
+from lightning.fabric.strategies import DeepSpeedStrategy
+
+
+# NOTE: DeepSpeed requires a dummy optimizer to be passed in to the setup function
+class DummyOptimizer(optim.Optimizer):
+    def __init__(self, params):
+        super().__init__(params, defaults={})
 
 
 class CheckpointStateExtractor:
@@ -96,7 +106,7 @@ class CheckpointStateExtractor:
                 outputs, _ = self.model(input_ids)
                 outputs = outputs.transpose(1, 2)
                 loss = F.cross_entropy(outputs, labels)
-                self.fabric.backward(loss)
+                self.fabric.backward(loss, model=self.model)
 
         # cleanup forward hooks - NOTE this is not strictly necessary, since self.model is a
         # deepcopy of the original model; but it is good practice to remove the hooks after the
@@ -119,11 +129,14 @@ class CheckpointStateExtractor:
                     any(layer_suffix in name for layer_suffix in layer_suffixes)
                     and "weight" in name
                 ):
-                    assert (
-                        param.grad is not None
-                    ), "Gradient is None for layer: {name} at step: {step}"
+                    if isinstance(self.fabric.strategy, DeepSpeedStrategy):
+                        _grad = deepspeed.utils.safe_get_full_grad(param)
+                    else:
+                        _grad = param.grad
+
+                    assert _grad is not None, f"Gradient is None for layer: {name}"
                     name = re.sub(r"\.weight", "", name)
-                    checkpoint_gradients[name] = param.grad.detach().cpu()
+                    checkpoint_gradients[name] = _grad.detach().cpu()
 
         # zero out the gradients
         self.model.zero_grad()
@@ -185,12 +198,21 @@ class CheckpointStateExtractor:
 
         def _forward_hook(module, _, module_out):
             sequence_idx = self.learning_dynamics_config.sequence_idx
-            activations = module_out[:, sequence_idx, :].detach().cpu()
+
+            local_activations = module_out[:, sequence_idx, :].detach()
+
+            # Gather activations from all processes using fabric
+            gathered_activations = self.fabric.all_gather(local_activations)
+
+            # Reshape from [num_processes, batch_size, hidden_dim] to [total_batch_size, hidden_dim]
+            gathered_activations = gathered_activations.reshape(
+                -1, gathered_activations.shape[-1]
+            )
 
             # check if there is already a key for the module name
             if module_name not in checkpoint_activations:
                 # if there is no key, then we create a new key and store the hidden states
-                checkpoint_activations[module_name] = activations
+                checkpoint_activations[module_name] = gathered_activations
 
                 # extract the weight matrix just once
                 weight_matrix = module.weight.detach().cpu()
@@ -198,7 +220,7 @@ class CheckpointStateExtractor:
             else:
                 # if there is already a key, then we concatenate the new hidden states to the existing ones
                 checkpoint_activations[module_name] = torch.cat(
-                    (checkpoint_activations[module_name], activations)
+                    (checkpoint_activations[module_name], gathered_activations)
                 )
 
         return _forward_hook
@@ -227,38 +249,57 @@ def compute_learning_dynamics_states(
         A dictionary containing the activations, weights, and optionally gradients of the model.
     """
 
-    if fabric.global_rank != 0:
-        return
+    # NOTE: Synchronizing processes for fabric dataloader setup
+    fabric.barrier()
+    model.to("cpu")  # Offloading model to CPU
 
-    # Setting up datalaoder for
+    # Setting up Dataloader for learning dynamics
     def _collate_fn(batch):
         return {"input_ids": [entry["input_ids"] for entry in batch]}
 
     batch_size = checkpointing_config.learning_dynamics.batch_size
-    dataloader = DataLoader(
-        dataset, batch_size=batch_size, shuffle=False, collate_fn=_collate_fn
+    sub_batch_size = batch_size // fabric.world_size
+    extractor_dataloader = DataLoader(
+        dataset, batch_size=sub_batch_size, shuffle=False, collate_fn=_collate_fn
     )
-    extractor_dataloader = fabric.setup_dataloaders(dataloader)
+    extractor_dataloader = fabric.setup_dataloaders(
+        extractor_dataloader, use_distributed_sampler=True
+    )
 
     # Create a new model instance with same parameters but zero gradients
-    _model = Pico(model.config, fabric=fabric).to(fabric.device)
+    _model = Pico(model.config, fabric=fabric)
     _model.load_state_dict(model.state_dict())
+
+    if isinstance(fabric.strategy, DeepSpeedStrategy):
+        _model, _ = fabric.setup(_model, DummyOptimizer(_model.parameters()))
+    else:
+        _model = fabric.setup(_model)
+
     _model.zero_grad()
 
     # setup forward hooks for the model to save activations and weights at each layer
     state_extractor = CheckpointStateExtractor(
         checkpointing_config.learning_dynamics, fabric, _model
     )
+
     checkpoint_activations, checkpoint_weights, checkpoint_gradients = (
         state_extractor.extract_states(
             extractor_dataloader, compute_gradients=compute_gradients
         )
     )
 
+    del _model
+    torch.cuda.empty_cache()
+
+    # NOTE: Synchronizing processes for model setup
+    fabric.barrier()
+
+    model.to(fabric.device)
+
     return {
-        "checkpoint_activations": checkpoint_activations,
-        "checkpoint_weights": checkpoint_weights,
-        "checkpoint_gradients": checkpoint_gradients,
+        "activations": checkpoint_activations,
+        "weights": checkpoint_weights,
+        "gradients": checkpoint_gradients,
     }
 
 
@@ -350,7 +391,7 @@ def save_learning_dynamics_states(
             folder_path=learning_dynamics_path,
             path_in_repo=learning_dynamics_dir,
             repo_id=checkpointing_config.save_checkpoint_repo_id,
-            commit_message=f"Saving Learning Dynamics Datas -- Step {checkpoint_step}",
+            commit_message=f"Saving Learning Dynamics Data ({prefix}) -- Step {checkpoint_step}",
             revision=checkpointing_config.run_name,
             token=os.getenv("HF_TOKEN"),
         )

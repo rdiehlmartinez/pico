@@ -33,7 +33,7 @@ from src.training.utils import (
     initialize_tokenizer,
     initialize_dataloader,
     initialize_lr_scheduler,
-    initialize_checkpointing,
+    initialize_hf_checkpointing,
     initialize_experiment_tracker,
     initialize_logging,
     initialize_optimizer,
@@ -118,13 +118,15 @@ class Trainer:
 
         # Wrap with Fabric
         self.model, self.optimizer = self.fabric.setup(self.model, self.optimizer)
-        self.train_dataloader = self.fabric.setup_dataloaders(self.train_dataloader)
-
-        # Setup Checkpointing
-        initialize_checkpointing(
-            checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
+        self.train_dataloader = self.fabric.setup_dataloaders(
+            self.train_dataloader, use_distributed_sampler=False
         )
-        self.fabric.barrier()
+
+        # Setup HuggingFace Checkpointing
+        if self.configs["checkpointing"].save_checkpoint_repo_id is not None:
+            initialize_hf_checkpointing(
+                checkpointing_config=self.configs["checkpointing"], fabric=self.fabric
+            )
 
         ########################################################
         #
@@ -169,7 +171,8 @@ class Trainer:
                     next(train_iterator)
                 self.train_iterator = train_iterator
 
-                self.fabric.barrier()  # Sync so that all processes are on the same step
+                # NOTE: Sychronizing processes after fast-forwarding iterator
+                self.fabric.barrier()
 
         if self.should_start_from_scratch:
             self.initial_batch_step = 0
@@ -220,7 +223,7 @@ class Trainer:
         #
         ########################################################
 
-        # Save Initial Checkpoint; NOTE: if the checkpoint already exists, this performs a no-op
+        # Save Initial Checkpoint -- If the checkpoint already exists, this performs a no-op
         save_checkpoint(
             configs=self.configs,
             checkpoint_step=self.initial_batch_step,
@@ -239,6 +242,7 @@ class Trainer:
                     evaluation_config=self.configs["evaluation"],
                     checkpointing_config=self.configs["checkpointing"],
                     fabric=self.fabric,
+                    model=self.model,
                 )
                 self._log_evaluation_results(
                     evaluation_results, self.initial_batch_step
@@ -260,6 +264,7 @@ class Trainer:
                         evaluation_config=self.configs["evaluation"],
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
+                        model=self.model,
                     )
                     self._log_evaluation_results(
                         evaluation_results, self.initial_batch_step
@@ -271,8 +276,6 @@ class Trainer:
                         checkpoint_step=self.initial_batch_step,
                     )
 
-        self.fabric.barrier()
-
         ########################################################
         #
         # Main Training Loop (see `_training_loop` for details)
@@ -280,41 +283,7 @@ class Trainer:
         ########################################################
 
         if self.initial_batch_step < self.configs["training"].max_steps:
-            total_params = sum(p.numel() for p in self.model.parameters())
-            trainable_params = sum(
-                p.numel() for p in self.model.parameters() if p.requires_grad
-            )
-            global_batch_size = self.configs["data"].dataloader.batch_size
-            per_device_batch_size = self.train_dataloader.batch_size
-            gradient_accumulation_steps = self.configs[
-                "training"
-            ].optimization.gradient_accumulation_steps
-
-            device_type = ""
-            fabric_device = str(self.fabric.device)
-            if torch.cuda.is_available() and "cuda" in fabric_device:
-                device_type = torch.cuda.get_device_name(self.fabric.device)
-            elif torch.backends.mps.is_available() and "mps" in fabric_device:
-                device_type = "MPS"
-            else:
-                device_type = "CPU"
-
-            self.log("=" * 50)
-            self.log("✨ Training Configuration")
-            self.log("=" * 50)
-            self.log(f"Starting from step: {self.initial_batch_step}")
-            self.log("Model Setup:")
-            self.log(f"└─ Total Parameters: {total_params:,}")
-            self.log(f"└─ Trainable Parameters: {trainable_params:,}")
-            self.log("Distributed Setup:")
-            self.log(f"└─ Number of Devices: {self.fabric.world_size}")
-            self.log(f"└─ Device Type: {device_type}")
-            self.log("Batch Size Configuration:")
-            self.log(f"└─ Global Batch Size: {global_batch_size}")
-            self.log(f"└─ Per Device Batch Size: {per_device_batch_size}")
-            self.log(f"└─ Gradient Accumulation Steps: {gradient_accumulation_steps}")
-            self.log("=" * 50)
-
+            self._log_training_configuration()
             final_step = self._training_loop()
         else:
             final_step = self.initial_batch_step
@@ -363,6 +332,7 @@ class Trainer:
                     evaluation_config=self.configs["evaluation"],
                     checkpointing_config=self.configs["checkpointing"],
                     fabric=self.fabric,
+                    model=self.model,
                 )
                 self._log_evaluation_results(evaluation_results, final_step)
                 save_evaluation_results(
@@ -381,9 +351,15 @@ class Trainer:
             )
 
         # Cleanup distributed training
-        self.fabric.barrier()  # Ensure all processes are ready to cleanup
-        if torch.distributed.is_initialized():
-            torch.distributed.destroy_process_group()
+        self.fabric.barrier()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+            if torch.distributed.is_initialized():
+                torch.distributed.destroy_process_group()
+
+            del self.train_dataloader  # NOTE: shutting down worker nodes
+
+        self.fabric.barrier()
 
     def _training_loop(self) -> int:
         """Execute the main training loop.
@@ -412,7 +388,7 @@ class Trainer:
 
         if self.should_compute_learning_dynamics:
             # NOTE: we basically re-construct the full batch here so that we can compute learning dynamics
-            full_batch = {"input_ids": []}
+            training_batch = {"input_ids": []}
 
         # NOTE: determine what sub-batch we should start from
         initial_sub_batch_step = (
@@ -423,6 +399,12 @@ class Trainer:
         for sub_batch_step, sub_batch in enumerate(
             self.train_iterator, start=initial_sub_batch_step
         ):
+            # NOTE: We want to store the entire training batch whenever we are computing learning dynamics
+            # and we are at a checkpointing step.
+            should_store_training_batch = self.should_compute_learning_dynamics and (
+                batch_step % self.configs["checkpointing"].save_every_n_steps == 0
+            )
+
             ########################################################
             #
             # Forward Pass
@@ -433,8 +415,17 @@ class Trainer:
             input_ids = _input_ids[:, :-1]
             labels = _input_ids[:, 1:]
 
-            if self.should_compute_learning_dynamics:
-                full_batch["input_ids"].extend(sub_batch["input_ids"])
+            if should_store_training_batch:
+                gathered_input_ids = self.fabric.all_gather(_input_ids)
+
+                # NOTE: On multi-GPU, we need to reshape the input_ids to be a 2D tensor; on
+                # a single GPU, the input_ids are already a 2D tensor.
+                if self.fabric.world_size > 1:
+                    gathered_input_ids = gathered_input_ids.reshape(
+                        -1, *gathered_input_ids.shape[2:]
+                    )
+
+                training_batch["input_ids"].extend(gathered_input_ids.tolist())
 
             # Forward pass
             model_output, _ = self.model(input_ids)
@@ -456,7 +447,8 @@ class Trainer:
                 loss = F.cross_entropy(model_output, labels)
                 self.fabric.backward(
                     loss
-                    / self.configs["training"].optimization.gradient_accumulation_steps
+                    / self.configs["training"].optimization.gradient_accumulation_steps,
+                    model=self.model,
                 )
 
                 if torch.isnan(loss) or torch.isinf(loss):
@@ -495,25 +487,32 @@ class Trainer:
             if batch_step % self.configs["checkpointing"].save_every_n_steps == 0:
                 if self.should_compute_learning_dynamics:
                     self.log(f"Step {batch_step} -- 📈 Saving Learning Dynamics")
-                    full_batch_dataset = Dataset.from_dict(full_batch)
+
+                    # Training Batch Learning Dynamics
+                    training_batch_dataset = Dataset.from_dict(training_batch)
+
                     learning_dynamics_train_states = compute_learning_dynamics_states(
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
                         model=self.model,
-                        dataset=full_batch_dataset,
+                        dataset=training_batch_dataset,
                         compute_gradients=True,
                     )
+
                     save_learning_dynamics_states(
                         checkpointing_config=self.configs["checkpointing"],
                         checkpoint_step=batch_step,
                         prefix="train",
                         fabric=self.fabric,
                         learning_dynamics_states=learning_dynamics_train_states,
-                        learning_dynamics_dataset=full_batch_dataset,
+                        learning_dynamics_dataset=training_batch_dataset,
                         tokenizer=self.tokenizer,
                     )
+                    training_batch = {
+                        "input_ids": []
+                    }  # Resetting training_batch for next training batch
 
-                    # Val dynamics
+                    # Validation Data Learning Dynamics
                     if self.learning_dynamics_eval_dataset is not None:
                         learning_dynamics_val_states = compute_learning_dynamics_states(
                             checkpointing_config=self.configs["checkpointing"],
@@ -529,8 +528,6 @@ class Trainer:
                             fabric=self.fabric,
                             learning_dynamics_states=learning_dynamics_val_states,
                         )
-
-                    self.fabric.barrier()
 
             ########################################################
             #
@@ -567,6 +564,7 @@ class Trainer:
                         evaluation_config=self.configs["evaluation"],
                         checkpointing_config=self.configs["checkpointing"],
                         fabric=self.fabric,
+                        model=self.model,
                     )
                     if evaluation_results is not None:
                         self._log_evaluation_results(evaluation_results, batch_step)
@@ -576,8 +574,6 @@ class Trainer:
                             evaluation_results=evaluation_results,
                             checkpoint_step=batch_step,
                         )
-
-                self.fabric.barrier()  # Final sync before continuing training
 
             # Break if we've reached training steps
             if batch_step >= self.configs["training"].max_steps:
@@ -646,6 +642,43 @@ class Trainer:
                 prefix = "└──" if i == len(evaluation_results) - 1 else "├──"
                 self.log(f"{prefix} {metric}: {result}")
                 self.fabric.log(f"eval/{metric}", result, step=batch_step)
+
+    def _log_training_configuration(self):
+        """Log training configuration details including model, hardware, and batch settings."""
+        total_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(
+            p.numel() for p in self.model.parameters() if p.requires_grad
+        )
+        global_batch_size = self.configs["data"].dataloader.batch_size
+        per_device_batch_size = self.train_dataloader.batch_size
+        gradient_accumulation_steps = self.configs[
+            "training"
+        ].optimization.gradient_accumulation_steps
+
+        device_type = ""
+        fabric_device = str(self.fabric.device)
+        if torch.cuda.is_available() and "cuda" in fabric_device:
+            device_type = torch.cuda.get_device_name(self.fabric.device)
+        elif torch.backends.mps.is_available() and "mps" in fabric_device:
+            device_type = "MPS (Apple Silicon)"
+        else:
+            device_type = "CPU"
+
+        self.log("=" * 50)
+        self.log("✨ Training Configuration")
+        self.log("=" * 50)
+        self.log(f"Starting from step: {self.initial_batch_step}")
+        self.log("Model Setup:")
+        self.log(f"└─ Total Parameters: {total_params:,}")
+        self.log(f"└─ Trainable Parameters: {trainable_params:,}")
+        self.log("Distributed Setup:")
+        self.log(f"└─ Number of Devices: {self.fabric.world_size}")
+        self.log(f"└─ Device Type: {device_type}")
+        self.log("Batch Size Configuration:")
+        self.log(f"└─ Global Batch Size: {global_batch_size}")
+        self.log(f"└─ Per Device Batch Size: {per_device_batch_size}")
+        self.log(f"└─ Gradient Accumulation Steps: {gradient_accumulation_steps}")
+        self.log("=" * 50)
 
     @rank_zero_only
     def log(self, msg: str, level: int = logging.INFO) -> None:

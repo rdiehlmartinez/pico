@@ -1,0 +1,27 @@
+# Demo config file 
+# You can follow this template to create your own config file
+# Refer to the config files in the configs/ directory to see all the available options
+
+checkpointing:
+  run_name: "pico-medium-1"
+  save_checkpoint_repo_id: "pico-lm/pico-medium"
+
+  learning_dynamics:
+    batch_size: 256
+
+model:
+    d_model: 768
+    activation_hidden_dim: 3072
+
+training:
+  optimization:
+    gradient_accumulation_steps: 4
+  
+  fabric:
+    num_nodes: 4
+    num_devices: 4
+  
+evaluation: 
+  paloma:
+    batch_size: 32
+  

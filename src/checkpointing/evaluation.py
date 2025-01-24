@@ -35,7 +35,7 @@ def save_evaluation_results(
         evaluation_results: Dictionary containing evaluation metrics
     """
 
-    # Only save on rank 0 to avoid conflicts
+    # NOTE: Only save on rank 0 to avoid conflicts (assumes evaluation results are gathered on rank 0)
     if fabric.global_rank != 0:
         return
 
