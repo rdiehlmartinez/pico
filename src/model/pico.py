@@ -398,7 +398,7 @@ class PicoBlock(nn.Module):
         super().__init__()
 
         self.attention = Attention(config, fabric)
-        self.feed_forward = SwiGLU(config)
+        self.swiglu = SwiGLU(config)
         self.attention_norm = RMSNorm(config)
         self.swiglu_norm = RMSNorm(config)
 
@@ -418,7 +418,7 @@ class PicoBlock(nn.Module):
         # NOTE: cached_key_values is None if use_cache is False
 
         h = input + attention_output
-        out = h + self.feed_forward(self.swiglu_norm(h))
+        out = h + self.swiglu(self.swiglu_norm(h))
         return out, cached_key_values
 
 
