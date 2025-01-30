@@ -164,6 +164,7 @@ class RoPE(nn.Module):
         shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(input_shape)]
         return _freqs_cis.view(*shape)
 
+    @torch.no_grad()
     def forward(
         self,
         queries: torch.Tensor,
@@ -321,9 +322,9 @@ class Attention(nn.Module):
 
         with sdpa_kernel(backends=[backend]):
             attn_output = F.scaled_dot_product_attention(
-                queries,
-                keys,
-                values,
+                queries.contiguous(),
+                keys.contiguous(),
+                values.contiguous(),
                 attn_mask=mask,
                 enable_gqa=True if self.n_rep > 1 else False,
             )
@@ -398,7 +399,7 @@ class PicoBlock(nn.Module):
         super().__init__()
 
         self.attention = Attention(config, fabric)
-        self.feed_forward = SwiGLU(config)
+        self.swiglu = SwiGLU(config)
         self.attention_norm = RMSNorm(config)
         self.swiglu_norm = RMSNorm(config)
 
@@ -418,7 +419,7 @@ class PicoBlock(nn.Module):
         # NOTE: cached_key_values is None if use_cache is False
 
         h = input + attention_output
-        out = h + self.feed_forward(self.swiglu_norm(h))
+        out = h + self.swiglu(self.swiglu_norm(h))
         return out, cached_key_values
 
 
@@ -525,7 +526,7 @@ class Pico(nn.Module):
             )
 
             h, layer_cached_key_values = layer(
-                h, mask=mask, past_key_values=layer_past_key_values, use_cache=True
+                h, mask=mask, past_key_values=layer_past_key_values, use_cache=use_cache
             )
 
             if use_cache:

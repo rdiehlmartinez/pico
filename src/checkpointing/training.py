@@ -234,6 +234,15 @@ def save_checkpoint(
                 token=os.getenv("HF_TOKEN"),
             )
 
+            if checkpoint_step == 0:
+                # Uploading Tokenizer during first step since it never changes
+                tokenizer.push_to_hub(
+                    repo_id=checkpointing_config.save_checkpoint_repo_id,
+                    commit_message=f"Saving Tokenizer -- Step {checkpoint_step}",
+                    revision=checkpointing_config.run_name,
+                    token=os.getenv("HF_TOKEN"),
+                )
+
             # Upload the fabric checkpoint directory
             upload_folder(
                 folder_path=fabric_checkpoint_path,
