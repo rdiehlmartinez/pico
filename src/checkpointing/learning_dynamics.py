@@ -205,7 +205,9 @@ class CheckpointStateExtractor:
             gathered_activations = self.fabric.all_gather(local_activations)
 
             # Reshape from [num_processes, batch_size, hidden_dim] to [total_batch_size, hidden_dim]
-            gathered_activations = gathered_activations.reshape(
+            # NOTE: transposing allows us to interleave the activations from each process so that
+            # they are in the correct order. (i.e. activation N is from data sample N)
+            gathered_activations = gathered_activations.transpose(0, 1).reshape(
                 -1, gathered_activations.shape[-1]
             )
 
@@ -259,8 +261,17 @@ def compute_learning_dynamics_states(
 
     batch_size = checkpointing_config.learning_dynamics.batch_size
     sub_batch_size = batch_size // fabric.world_size
+
+    # NOTE: Make sure to set drop_last to False, otherwise the last batch will be dropped
+    # and we will not have a complete set of activations for the last sample. Also,
+    # we need to set shuffle to False, otherwise the activations will be shuffled across
+    # processes and we will not be able to interleave them correctly.
     extractor_dataloader = DataLoader(
-        dataset, batch_size=sub_batch_size, shuffle=False, collate_fn=_collate_fn
+        dataset,
+        batch_size=sub_batch_size,
+        shuffle=False,
+        collate_fn=_collate_fn,
+        drop_last=False,
     )
     extractor_dataloader = fabric.setup_dataloaders(
         extractor_dataloader, use_distributed_sampler=True
@@ -295,6 +306,16 @@ def compute_learning_dynamics_states(
     fabric.barrier()
 
     model.to(fabric.device)
+
+    if len(checkpoint_activations) > len(dataset):
+        # NOTE: The DataSampler might add extra samples to the dataset to make it evenly divisible
+        # by the number of processes. We need to remove these extra samples.
+        checkpoint_activations = checkpoint_activations[: len(dataset)]
+    elif len(checkpoint_activations) < len(dataset):
+        # NOTE: This should never happen, since we set drop_last to False and shuffle to False.
+        raise ValueError(
+            f"Number of activations ({len(checkpoint_activations)}) does not match number of samples in dataset ({len(dataset)})"
+        )
 
     return {
         "activations": checkpoint_activations,
