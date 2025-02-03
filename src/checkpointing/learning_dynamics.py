@@ -307,15 +307,16 @@ def compute_learning_dynamics_states(
 
     model.to(fabric.device)
 
-    if len(checkpoint_activations) > len(dataset):
-        # NOTE: The DataSampler might add extra samples to the dataset to make it evenly divisible
-        # by the number of processes. We need to remove these extra samples.
-        checkpoint_activations = checkpoint_activations[: len(dataset)]
-    elif len(checkpoint_activations) < len(dataset):
-        # NOTE: This should never happen, since we set drop_last to False and shuffle to False.
-        raise ValueError(
-            f"Number of activations ({len(checkpoint_activations)}) does not match number of samples in dataset ({len(dataset)})"
-        )
+    # NOTE: Trimming down the activations to match the dataset size;
+    # This is because the DataSampler might add extra samples to the dataset to make it evenly divisible
+    # by the number of processes. We need to remove these extra samples.
+    for layer_name, layer_activations in checkpoint_activations.items():
+        if len(layer_activations) > len(dataset):
+            checkpoint_activations[layer_name] = layer_activations[: len(dataset)]
+        elif len(layer_activations) < len(dataset):
+            raise ValueError(
+                f"Number of activations ({len(layer_activations)}) in layer {layer_name} does not match number of samples in dataset ({len(dataset)})"
+            )
 
     return {
         "activations": checkpoint_activations,
