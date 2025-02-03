@@ -396,6 +396,16 @@ class Trainer:
             * self.configs["training"].optimization.gradient_accumulation_steps
         )
 
+        ###############################################################
+        #
+        # Core loop starts here
+        # NOTE: the ratio between sub_batch_step and batch_step
+        # is the configured number of gradient_accumulation_steps
+        # i.e. with 32 configured gradient accumulation steps,
+        # there are 32 sub_batch_steps for each batch_step
+        #
+        ###############################################################
+
         for sub_batch_step, sub_batch in enumerate(
             self.train_iterator, start=initial_sub_batch_step
         ):
