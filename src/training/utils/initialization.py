@@ -19,7 +19,7 @@ from datetime import datetime
 import wandb
 from huggingface_hub import create_repo, create_branch
 from wandb.integration.lightning.fabric import WandbLogger
-from datasets import load_dataset, Dataset, IterableDataset
+from datasets import load_dataset, Dataset
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
@@ -215,49 +215,87 @@ def initialize_fabric(
 ########################################################
 
 
-class ShardedIterableDataset(IterableDataset):
-    """
-    A super simple implementation of a sharded iterable dataset that enables DataParallelism
-    across multiple workers. Ensures that each worker gets a unique shard of the dataset.
-
-    NOTE: Also works fine if there is only one worker.
-    """
-
-    def __init__(self, dataset, rank, world_size):
-        self.dataset = dataset
-        self.rank = rank
-        self.world_size = world_size
-
-    def __iter__(self):
-        iterator = iter(self.dataset)
-        # NOTE: Start by skipping to this worker's shard
-        for _ in range(self.rank):
-            next(iterator)
-
-        # NOTE: Yield every world_size-th item
-        while True:
-            try:
-                yield next(iterator)
-                # Skip other workers' samples
-                for _ in range(self.world_size - 1):
-                    next(iterator)
-            except StopIteration:
-                break
-
-
-def initialize_dataset(data_config: DataConfig, fabric: L.Fabric):
+def initialize_dataset(
+    data_config: DataConfig,
+    fabric: L.Fabric,
+    initial_batch_step: Optional[int] = 0,
+    return_fast_forward_steps: bool = False,
+):
     """Initialize dataset based on the given config.
 
-    Feel free to add any more complicated dataset logic here as well.
+    This function will return a dataset object, and optionally a fast_forward_steps value.
+
+    The fast_forward_steps value is the number of steps that we need to fast-forward an iterator by,
+    so that we can continue from a certain batch of data we would have seen had training not previously
+    stopped. Depending on how the dataset is loaded, the amount of steps to fast-forward may be
+    different from the initial_batch_step value.
+
+    NOTE: This functionality is primarily useful for streaming datasets (which for large
+    datasets is most of the time).
 
     Args:
         data_config: Configuration object containing dataset settings.
+        fabric: A Lightning Fabric instance.
+        initial_batch_step: The initial batch step to fast-forward to.
+        return_fast_forward_steps: Whether to return the fast-forward steps value.
 
     Returns:
-        ShardedIterableDataset: Initialized dataset object.
+        Dataset: Initialized dataset object.
+        Optional[int]: Number of steps to fast-forward the iterator by, if return_fast_forward_steps is True.
     """
-    base_dataset = load_dataset(data_config.dataset.name, split="train", streaming=True)
-    return ShardedIterableDataset(base_dataset, fabric.global_rank, fabric.world_size)
+
+    fast_forward_steps = 0
+
+    if data_config.dataset.name == "pico-lm/pretokenized-dolma":
+        # NOTE: We know that the dataset is sharded into 10,000 shards, so we can easily compute
+        # the data file that we need to load in that contains the batch of data at
+        # initial_batch_step.
+
+        if initial_batch_step is not None:
+            examples_per_shard = 20_480
+            total_shards = 10_000
+            batches_per_shard = examples_per_shard // data_config.dataloader.batch_size
+            shard_idx = initial_batch_step // batches_per_shard
+
+            data_files = [
+                f"data/train-{str(_shard_idx).zfill(5)}-of-{total_shards}.parquet"
+                for _shard_idx in range(shard_idx, total_shards)
+            ]
+
+            fast_forward_steps = initial_batch_step % batches_per_shard
+        else:
+            data_files = None
+
+        base_dataset = load_dataset(
+            data_config.dataset.name,
+            split="train",
+            streaming=True,
+            data_files=data_files,
+        )
+    else:
+        # NOTE: For other datasets, you might want to add some custom loading logic, especially
+        # to help with loading or fast-forwarding to the correct batch.
+
+        base_dataset = load_dataset(
+            data_config.dataset.name, split="train", streaming=True
+        )
+
+    if data_config.dataset.name == "pico-lm/pretokenized-dolma":
+        from .data import ShardedIterableDataset
+
+        # NOTE: We wrap the dataset in a ShardedIterableDataset, which is a custom class that
+        # allows us to shard an iterable dataset across multiple processes. This is useful for
+        # distributed training, where we want data-parallelism.
+        dataset = ShardedIterableDataset(
+            base_dataset, fabric.global_rank, fabric.world_size
+        )
+    else:
+        dataset = base_dataset
+
+    if return_fast_forward_steps:
+        return dataset, fast_forward_steps
+    else:
+        return dataset
 
 
 def initialize_tokenizer(data_config: DataConfig):
