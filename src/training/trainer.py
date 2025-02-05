@@ -67,7 +67,7 @@ class Trainer:
 
         ########################################################
         #
-        # Basic Initialization of Configs, Data, Model, Optimizer, etc.
+        # Basic Initialization of Configs, Fabric, Model, Optimizer, etc.
         #
         ########################################################
 
@@ -97,16 +97,6 @@ class Trainer:
             fabric=self.fabric,
         )
 
-        # Setup Dataset, Tokenizer, and Dataloader
-        self.train_dataset = initialize_dataset(self.configs["data"], self.fabric)
-        self.train_dataloader = initialize_dataloader(
-            data_config=self.configs["data"],
-            training_config=self.configs["training"],
-            fabric=self.fabric,
-            dataset=self.train_dataset,
-        )
-        self.tokenizer = initialize_tokenizer(data_config=self.configs["data"])
-
         # Setup Model, Optimizer, and Dataloaders
         self.model = Pico(model_config=self.configs["model"], fabric=self.fabric)
         self.optimizer = initialize_optimizer(
@@ -118,9 +108,6 @@ class Trainer:
 
         # Wrap with Fabric
         self.model, self.optimizer = self.fabric.setup(self.model, self.optimizer)
-        self.train_dataloader = self.fabric.setup_dataloaders(
-            self.train_dataloader, use_distributed_sampler=False
-        )
 
         # Setup HuggingFace Checkpointing
         if self.configs["checkpointing"].save_checkpoint_repo_id is not None:
@@ -135,7 +122,6 @@ class Trainer:
         ########################################################
 
         self.should_load_checkpoint = self.configs["checkpointing"].training.auto_resume
-        self.should_start_from_scratch = not self.should_load_checkpoint
 
         # Possibly load a checkpoint
         if self.should_load_checkpoint:
@@ -148,35 +134,59 @@ class Trainer:
                 lr_scheduler=self.lr_scheduler,
             )
 
-            if resume_checkpoint is None:
-                # If no checkpoint is found, we start from scratch
-                self.should_start_from_scratch = True
-            else:
+            if resume_checkpoint:
                 (
                     self.model,
                     self.optimizer,
                     self.lr_scheduler,
                     self.initial_batch_step,
                 ) = resume_checkpoint
-
-                # NOTE: We need to fast-forward the iterator to the correct step so that we can
-                # continue from the correct batch of data we would have seen had training not
-                # previously stopped.
-                train_iterator = iter(self.train_dataloader)
-                sub_batch_step = (
-                    self.initial_batch_step
-                    * self.configs["training"].optimization.gradient_accumulation_steps
-                )
-                for _ in range(sub_batch_step):
-                    next(train_iterator)
-                self.train_iterator = train_iterator
-
-                # NOTE: Sychronizing processes after fast-forwarding iterator
-                self.fabric.barrier()
-
-        if self.should_start_from_scratch:
+            else:
+                self.initial_batch_step = 0
+        else:
             self.initial_batch_step = 0
-            self.train_iterator = iter(self.train_dataloader)
+
+        ########################################################
+        #
+        # Initialization of Dataset & DataLoader (possibly fast-forwarding to correct batch)
+        #
+        ########################################################
+
+        self.train_dataset, fast_forward_steps = initialize_dataset(
+            data_config=self.configs["data"],
+            fabric=self.fabric,
+            initial_batch_step=self.initial_batch_step,
+            return_fast_forward_steps=True,
+        )
+
+        self.train_dataloader = initialize_dataloader(
+            data_config=self.configs["data"],
+            training_config=self.configs["training"],
+            fabric=self.fabric,
+            dataset=self.train_dataset,
+        )
+        self.train_dataloader = self.fabric.setup_dataloaders(
+            self.train_dataloader, use_distributed_sampler=False
+        )
+
+        self.tokenizer = initialize_tokenizer(data_config=self.configs["data"])
+
+        # NOTE: We may need to fast-forward the iterator to the correct step so that we can
+        # continue from the correct batch of data we would have seen had training not
+        # previously stopped.
+        train_iterator = iter(self.train_dataloader)
+        if fast_forward_steps > 0:
+            fast_forward_sub_steps = (
+                fast_forward_steps
+                * self.configs["training"].optimization.gradient_accumulation_steps
+            )
+            for _ in range(fast_forward_sub_steps):
+                next(train_iterator)
+
+        self.train_iterator = train_iterator
+
+        # NOTE: Sychronizing processes after fast-forwarding iterator
+        self.fabric.barrier()
 
         ########################################################
         #
