@@ -19,7 +19,7 @@ from datetime import datetime
 import wandb
 from huggingface_hub import create_repo, create_branch
 from wandb.integration.lightning.fabric import WandbLogger
-from datasets import load_dataset, Dataset
+from datasets import load_dataset, Dataset, DownloadConfig
 from torch.utils.data import DataLoader
 from transformers import AutoTokenizer
 from typing import Optional, Dict, Union
@@ -244,6 +244,10 @@ def initialize_dataset(
         Optional[int]: Number of steps to fast-forward the iterator by, if return_fast_forward_steps is True.
     """
 
+    download_config = DownloadConfig(
+        max_retries=10,  # default is 1 and can lead to pre-mature HTTPS errors
+    )
+
     fast_forward_steps = 0
 
     if data_config.dataset.name == "pico-lm/pretokenized-dolma":
@@ -271,13 +275,17 @@ def initialize_dataset(
             split="train",
             streaming=True,
             data_files=data_files,
+            download_config=download_config,
         )
     else:
         # NOTE: For other datasets, you might want to add some custom loading logic, especially
         # to help with loading or fast-forwarding to the correct batch.
 
         base_dataset = load_dataset(
-            data_config.dataset.name, split="train", streaming=True
+            data_config.dataset.name,
+            split="train",
+            streaming=True,
+            download_config=download_config,
         )
 
     if data_config.dataset.name == "pico-lm/pretokenized-dolma":

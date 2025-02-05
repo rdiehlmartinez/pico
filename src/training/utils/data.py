@@ -3,7 +3,6 @@ Utilities for data loading and processing.
 """
 
 from torch.utils.data import IterableDataset
-from datasets import load_dataset
 
 
 class ShardedIterableDataset(IterableDataset):
@@ -34,19 +33,3 @@ class ShardedIterableDataset(IterableDataset):
                     next(iterator)
             except StopIteration:
                 break
-
-
-def load_sharded_dataset(
-    dataset_name: str, initial_batch_step: int, batches_per_shard: int
-) -> IterableDataset:
-    """
-    Load a sharded dataset for a given global step.
-    """
-
-    shard_idx = initial_batch_step // batches_per_shard
-    valid_files = [
-        f"train-{_shard_idx}-of-10000.parquet" for _shard_idx in range(shard_idx, 10000)
-    ]
-    return load_dataset(
-        dataset_name, split="train", streaming=True, data_files=valid_files
-    )
