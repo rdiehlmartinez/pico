@@ -148,6 +148,7 @@ class RoPE(nn.Module):
         freqs = torch.outer(positions, _freqs)
         return torch.polar(torch.ones_like(freqs), freqs)  # complex64
 
+    @torch.no_grad()
     def get_freqs_cis(
         self, input_shape: torch.Size, start_pos: int, end_pos: int
     ) -> torch.Tensor:
@@ -164,7 +165,6 @@ class RoPE(nn.Module):
         shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(input_shape)]
         return _freqs_cis.view(*shape)
 
-    @torch.no_grad()
     def forward(
         self,
         queries: torch.Tensor,
