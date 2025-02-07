@@ -98,7 +98,7 @@ class Trainer:
         )
 
         # Setup Model, Optimizer, and Dataloaders
-        self.model = Pico(model_config=self.configs["model"], fabric=self.fabric)
+        self.model = Pico(model_config=self.configs["model"])
         self.optimizer = initialize_optimizer(
             training_config=self.configs["training"], model=self.model
         )

@@ -41,7 +41,6 @@ try:
     if TYPE_CHECKING:
         # We need to do this to avoid importing these when creating the HF-compatible models
         from src.config import ModelConfig
-        import lightning as L
 except ImportError:
     pass
 
@@ -106,13 +105,12 @@ class RoPE(nn.Module):
             - config.d_model: Model dimension
             - config.attention_n_heads: Number of attention heads
             - config.max_seq_len: Maximum sequence length
-        fabric (L.Fabric): Lightning Fabric instance for device management
 
     References:
         https://arxiv.org/abs/2104.09864
     """
 
-    _freqs_cis_tensor: torch.Tensor = None
+    _freqs_cis_tensor: torch.Tensor | None = None
 
     def __init__(self, config: Union["ModelConfig", "PicoHFConfig"]):
         super().__init__()
@@ -168,7 +166,7 @@ class RoPE(nn.Module):
         self,
         queries: torch.Tensor,
         keys: torch.Tensor,
-        start_pos: Optional[int] = 0,
+        start_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply RoPE Embeddings to Queries and Keys
 
@@ -216,7 +214,6 @@ class Attention(nn.Module):
             - config.d_model: Model dimension
             - config.batch_size: Maximum batch size
             - config.max_seq_len: Maximum sequence length
-        fabric (L.Fabric): Lightning Fabric instance
 
     Shape:
         - Input: (batch_size, seq_len, d_model)
@@ -226,11 +223,8 @@ class Attention(nn.Module):
     def __init__(
         self,
         config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
-
-        self.fabric = fabric
 
         self.n_heads = config.attention_n_heads
         self.n_kv_heads = config.attention_n_kv_heads
@@ -254,7 +248,7 @@ class Attention(nn.Module):
         self,
         input: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[torch.Tensor]] = None,
+        past_key_values: Optional[Tuple[torch.Tensor, ...]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """Forward pass for the attention mechanism.
@@ -308,7 +302,7 @@ class Attention(nn.Module):
         values = values.transpose(1, 2)
 
         # see if cuda available
-        if self.fabric and self.fabric.device.type == "cuda":
+        if torch.cuda.is_available():
             backend = SDPBackend.CUDNN_ATTENTION
         else:
             backend = SDPBackend.MATH
@@ -381,17 +375,15 @@ class PicoBlock(nn.Module):
     Args:
         config (Union[ModelConfig, PicoHFConfig]): Model configuration; either a dataclass or
             a HuggingFace PicoHFConfig
-        fabric (L.Fabric): Lightning Fabric instance
     """
 
     def __init__(
         self,
         config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
 
-        self.attention = Attention(config, fabric)
+        self.attention = Attention(config)
         self.swiglu = SwiGLU(config)
         self.attention_norm = RMSNorm(config)
         self.swiglu_norm = RMSNorm(config)
@@ -433,15 +425,13 @@ class Pico(nn.Module):
     def __init__(
         self,
         model_config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
         self.config = model_config
-        self.fabric = fabric
 
         self.embedding_proj = nn.Embedding(self.config.vocab_size, self.config.d_model)
         self.layers = nn.ModuleList(
-            [PicoBlock(self.config, self.fabric) for _ in range(self.config.n_layers)]
+            [PicoBlock(self.config) for _ in range(self.config.n_layers)]
         )
         self.output_norm = RMSNorm(self.config)
         self.de_embedding_proj = nn.Linear(
@@ -493,12 +483,7 @@ class Pico(nn.Module):
         # Create causal mask for current sequence
         mask = None
         if seq_len > 1:
-            if self.fabric is not None:
-                mask = self.fabric.to_device(
-                    torch.full((seq_len, seq_len), float("-inf"))
-                )
-            else:
-                mask = torch.full((seq_len, seq_len), float("-inf"), device=h.device)
+            mask = torch.full((seq_len, seq_len), float("-inf"), device=h.device)
             mask = torch.triu(mask, diagonal=1)
 
             # If using KV cache, extend mask to cover cached sequence length
