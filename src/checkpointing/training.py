@@ -9,7 +9,7 @@ in a subdirectory. This is done to facilitate easier versioning of the HuggingFa
 
 import os
 import yaml
-from huggingface_hub import upload_folder
+from huggingface_hub import upload_folder, upload_file
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 from lightning.fabric.strategies import DeepSpeedStrategy
 
@@ -120,6 +120,7 @@ def save_checkpoint(
 
     {checkpointing_config.runs_dir}/
         └── {checkpointing_config.run_name}/
+            └── training_config.yaml           # Training config
             └── {checkpointing_config.checkpoints_dir}/
                 ├── step_{checkpoint_step}/
                 │   ├── config.json                    # HuggingFace model config
@@ -127,7 +128,6 @@ def save_checkpoint(
                 │   ├── vocab.json                     # Tokenizer vocab
                 │   ├── merges.txt                     # Tokenizer merges
                 │   └── {checkpointing_config.fabric_checkpoint_dir}/  # Fabric-specific files
-                │       ├── config.yaml                # Full training config
                 │       └── checkpoint/                # Distributed model checkpoint files (if using DeepSpeed)
                 │           OR
                 │       └── checkpoint.pt              # Single checkpoint file (if using other strategies)
@@ -204,7 +204,7 @@ def save_checkpoint(
 
     if fabric.global_rank == 0:
         # Save config in fabric directory
-        config_path = os.path.join(fabric_checkpoint_path, "config.yaml")
+        config_path = os.path.join(run_path, "training_config.yaml")
         if not os.path.exists(config_path):
             with open(config_path, "w") as f:
                 yaml.dump(configs, f)
@@ -239,6 +239,15 @@ def save_checkpoint(
                 tokenizer.push_to_hub(
                     repo_id=checkpointing_config.save_checkpoint_repo_id,
                     commit_message=f"Saving Tokenizer -- Step {checkpoint_step}",
+                    revision=checkpointing_config.run_name,
+                    token=os.getenv("HF_TOKEN"),
+                )
+
+                upload_file(
+                    path_or_fileobj=config_path,
+                    path_in_repo="training_config.yaml",
+                    repo_id=checkpointing_config.save_checkpoint_repo_id,
+                    commit_message=f"Saving Training Config -- Step {checkpoint_step}",
                     revision=checkpointing_config.run_name,
                     token=os.getenv("HF_TOKEN"),
                 )
