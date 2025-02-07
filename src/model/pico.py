@@ -112,14 +112,10 @@ class RoPE(nn.Module):
         https://arxiv.org/abs/2104.09864
     """
 
-    _freqs_cis: torch.Tensor = None
+    _freqs_cis_tensor: torch.Tensor = None
 
-    def __init__(
-        self, config: Union["ModelConfig", "PicoHFConfig"], fabric: "L.Fabric" = None
-    ):
+    def __init__(self, config: Union["ModelConfig", "PicoHFConfig"]):
         super().__init__()
-
-        self.fabric = fabric
 
         self.theta = config.position_emb_theta
         self.dim = config.d_model // config.attention_n_heads
@@ -127,10 +123,14 @@ class RoPE(nn.Module):
         max_seq_len = config.max_seq_len
 
         # only gets set once, and then reused for all RoPE instances
-        if RoPE._freqs_cis is None:
-            RoPE._freqs_cis = self._setup_freqs_cis(max_seq_len, self.theta, self.dim)
-            if fabric is not None:
-                RoPE._freqs_cis = fabric.to_device(RoPE._freqs_cis)
+        if RoPE._freqs_cis_tensor is None:
+            RoPE._freqs_cis_tensor = self._setup_freqs_cis(
+                max_seq_len, self.theta, self.dim
+            )
+
+        # register _freqs_cis buffer
+        # can be easily recomputed so persistent=False
+        self.register_buffer("_freqs_cis", self._freqs_cis_tensor, persistent=False)
 
     @classmethod
     def _setup_freqs_cis(cls, seq_len: int, theta: float, dim: int) -> torch.Tensor:
@@ -155,7 +155,7 @@ class RoPE(nn.Module):
 
         Makes the frequency tensor broadcastable with the input tensor.
         """
-        _freqs_cis = RoPE._freqs_cis[start_pos:end_pos]
+        _freqs_cis = self._freqs_cis[start_pos:end_pos]
         ndim = len(input_shape)
         assert 0 <= 1 < ndim
         assert _freqs_cis.shape == (input_shape[1], input_shape[-1])
@@ -164,7 +164,6 @@ class RoPE(nn.Module):
         shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(input_shape)]
         return _freqs_cis.view(*shape)
 
-    @torch.no_grad()
     def forward(
         self,
         queries: torch.Tensor,
@@ -189,12 +188,6 @@ class RoPE(nn.Module):
         freqs_end_pos = freqs_start_pos + queries_.shape[1]
 
         freqs_cis = self.get_freqs_cis(input_shape, freqs_start_pos, freqs_end_pos)
-        # if fabric is set, freqs_cis is already on the correct device
-        # otherwise, we need to move it to the correct device
-        if self.fabric is not None:
-            freqs_cis = self.fabric.to_device(freqs_cis)
-        else:
-            freqs_cis = freqs_cis.to(queries.device)
 
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
@@ -255,7 +248,7 @@ class Attention(nn.Module):
         self.v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
 
-        self.rope = RoPE(config, fabric)
+        self.rope = RoPE(config)
 
     def forward(
         self,
