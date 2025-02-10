@@ -297,18 +297,18 @@ class Attention(nn.Module):
             cached_keys = None
             cached_values = None
 
+        queries = queries.transpose(1, 2)
+        keys = keys.transpose(1, 2)
+        values = values.transpose(1, 2)
+
         apply_gqa = self.n_rep > 1
         if apply_gqa and queries.device.type == "mps":
             # NOTE: MPS does not support GQA in the SDPA kernel, but we can repeat the keys and values
             # outside of the kernel to get the same effect.
-            # See: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html?utm_source=chatgpt.com
-            keys = keys.repeat_interleave(self.n_rep, dim=2)
-            values = values.repeat_interleave(self.n_rep, dim=2)
+            # See: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+            keys = keys.repeat_interleave(self.n_rep, dim=-3)
+            values = values.repeat_interleave(self.n_rep, dim=-3)
             apply_gqa = False
-
-        queries = queries.transpose(1, 2)
-        keys = keys.transpose(1, 2)
-        values = values.transpose(1, 2)
 
         backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
 
