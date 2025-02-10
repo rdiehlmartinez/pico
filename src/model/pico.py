@@ -297,9 +297,14 @@ class Attention(nn.Module):
             cached_keys = None
             cached_values = None
 
-        if self.n_rep > 1 and queries.device.type == "mps":
+        apply_gqa = self.n_rep > 1
+        if apply_gqa and queries.device.type == "mps":
+            # NOTE: MPS does not support GQA in the SDPA kernel, but we can repeat the keys and values
+            # outside of the kernel to get the same effect.
+            # See: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html?utm_source=chatgpt.com
             keys = keys.repeat_interleave(self.n_rep, dim=2)
             values = values.repeat_interleave(self.n_rep, dim=2)
+            apply_gqa = False
 
         queries = queries.transpose(1, 2)
         keys = keys.transpose(1, 2)
@@ -313,7 +318,7 @@ class Attention(nn.Module):
                 keys.contiguous(),
                 values.contiguous(),
                 attn_mask=mask,
-                enable_gqa=self.n_rep > 1,
+                enable_gqa=apply_gqa,
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
@@ -489,9 +494,7 @@ class Pico(nn.Module):
             # If using KV cache, extend mask to cover cached sequence length
             if past_key_values is not None:
                 # Add zeros for cached tokens (we can attend to all of them)
-                mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask]).type_as(
-                    h
-                )
+                mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask])
 
         # NOTE: If we are using the cache, we need to store the cached KV pairs for each layer
         #       in a tuple. Each layer will have its own cached KV pair which we aggregate in a tuple.
