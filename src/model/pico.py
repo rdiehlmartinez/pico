@@ -41,7 +41,6 @@ try:
     if TYPE_CHECKING:
         # We need to do this to avoid importing these when creating the HF-compatible models
         from src.config import ModelConfig
-        import lightning as L
 except ImportError:
     pass
 
@@ -106,20 +105,15 @@ class RoPE(nn.Module):
             - config.d_model: Model dimension
             - config.attention_n_heads: Number of attention heads
             - config.max_seq_len: Maximum sequence length
-        fabric (L.Fabric): Lightning Fabric instance for device management
 
     References:
         https://arxiv.org/abs/2104.09864
     """
 
-    _freqs_cis: torch.Tensor = None
+    _freqs_cis_tensor: torch.Tensor | None = None
 
-    def __init__(
-        self, config: Union["ModelConfig", "PicoHFConfig"], fabric: "L.Fabric" = None
-    ):
+    def __init__(self, config: Union["ModelConfig", "PicoHFConfig"]):
         super().__init__()
-
-        self.fabric = fabric
 
         self.theta = config.position_emb_theta
         self.dim = config.d_model // config.attention_n_heads
@@ -127,10 +121,14 @@ class RoPE(nn.Module):
         max_seq_len = config.max_seq_len
 
         # only gets set once, and then reused for all RoPE instances
-        if RoPE._freqs_cis is None:
-            RoPE._freqs_cis = self._setup_freqs_cis(max_seq_len, self.theta, self.dim)
-            if fabric is not None:
-                RoPE._freqs_cis = fabric.to_device(RoPE._freqs_cis)
+        if RoPE._freqs_cis_tensor is None:
+            RoPE._freqs_cis_tensor = self._setup_freqs_cis(
+                max_seq_len, self.theta, self.dim
+            )
+
+        # register _freqs_cis buffer
+        # can be easily recomputed so persistent=False
+        self.register_buffer("_freqs_cis", self._freqs_cis_tensor, persistent=False)
 
     @classmethod
     def _setup_freqs_cis(cls, seq_len: int, theta: float, dim: int) -> torch.Tensor:
@@ -155,7 +153,7 @@ class RoPE(nn.Module):
 
         Makes the frequency tensor broadcastable with the input tensor.
         """
-        _freqs_cis = RoPE._freqs_cis[start_pos:end_pos]
+        _freqs_cis = self._freqs_cis[start_pos:end_pos]
         ndim = len(input_shape)
         assert 0 <= 1 < ndim
         assert _freqs_cis.shape == (input_shape[1], input_shape[-1])
@@ -164,12 +162,11 @@ class RoPE(nn.Module):
         shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(input_shape)]
         return _freqs_cis.view(*shape)
 
-    @torch.no_grad()
     def forward(
         self,
         queries: torch.Tensor,
         keys: torch.Tensor,
-        start_pos: Optional[int] = 0,
+        start_pos: int = 0,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Apply RoPE Embeddings to Queries and Keys
 
@@ -189,12 +186,6 @@ class RoPE(nn.Module):
         freqs_end_pos = freqs_start_pos + queries_.shape[1]
 
         freqs_cis = self.get_freqs_cis(input_shape, freqs_start_pos, freqs_end_pos)
-        # if fabric is set, freqs_cis is already on the correct device
-        # otherwise, we need to move it to the correct device
-        if self.fabric is not None:
-            freqs_cis = self.fabric.to_device(freqs_cis)
-        else:
-            freqs_cis = freqs_cis.to(queries.device)
 
         queries_rotated = torch.view_as_real(queries_ * freqs_cis).flatten(3)
         keys_rotated = torch.view_as_real(keys_ * freqs_cis).flatten(3)
@@ -223,7 +214,6 @@ class Attention(nn.Module):
             - config.d_model: Model dimension
             - config.batch_size: Maximum batch size
             - config.max_seq_len: Maximum sequence length
-        fabric (L.Fabric): Lightning Fabric instance
 
     Shape:
         - Input: (batch_size, seq_len, d_model)
@@ -233,11 +223,8 @@ class Attention(nn.Module):
     def __init__(
         self,
         config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
-
-        self.fabric = fabric
 
         self.n_heads = config.attention_n_heads
         self.n_kv_heads = config.attention_n_kv_heads
@@ -255,13 +242,13 @@ class Attention(nn.Module):
         self.v_proj = nn.Linear(d_model, self.n_kv_heads * self.head_dim, bias=False)
         self.o_proj = nn.Linear(self.n_heads * self.head_dim, d_model, bias=False)
 
-        self.rope = RoPE(config, fabric)
+        self.rope = RoPE(config)
 
     def forward(
         self,
         input: torch.Tensor,
         mask: Optional[torch.Tensor] = None,
-        past_key_values: Optional[Tuple[torch.Tensor]] = None,
+        past_key_values: Optional[Tuple[torch.Tensor, ...]] = None,
         use_cache: bool = False,
     ) -> Tuple[torch.Tensor, Optional[Tuple[torch.Tensor, torch.Tensor]]]:
         """Forward pass for the attention mechanism.
@@ -314,19 +301,24 @@ class Attention(nn.Module):
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
 
-        # see if cuda available
-        if self.fabric and self.fabric.device.type == "cuda":
-            backend = SDPBackend.CUDNN_ATTENTION
-        else:
-            backend = SDPBackend.MATH
+        apply_gqa = self.n_rep > 1
+        if apply_gqa and queries.device.type == "mps":
+            # NOTE: MPS does not support GQA in the SDPA kernel, but we can repeat the keys and values
+            # outside of the kernel to get the same effect.
+            # See: https://pytorch.org/docs/stable/generated/torch.nn.functional.scaled_dot_product_attention.html
+            keys = keys.repeat_interleave(self.n_rep, dim=-3)
+            values = values.repeat_interleave(self.n_rep, dim=-3)
+            apply_gqa = False
 
-        with sdpa_kernel(backends=[backend]):
+        backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
+
+        with sdpa_kernel(backends=backends):
             attn_output = F.scaled_dot_product_attention(
                 queries.contiguous(),
                 keys.contiguous(),
                 values.contiguous(),
-                attn_mask=mask,
-                enable_gqa=True if self.n_rep > 1 else False,
+                attn_mask=mask.to(queries.dtype),
+                enable_gqa=apply_gqa,
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
@@ -388,17 +380,15 @@ class PicoBlock(nn.Module):
     Args:
         config (Union[ModelConfig, PicoHFConfig]): Model configuration; either a dataclass or
             a HuggingFace PicoHFConfig
-        fabric (L.Fabric): Lightning Fabric instance
     """
 
     def __init__(
         self,
         config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
 
-        self.attention = Attention(config, fabric)
+        self.attention = Attention(config)
         self.swiglu = SwiGLU(config)
         self.attention_norm = RMSNorm(config)
         self.swiglu_norm = RMSNorm(config)
@@ -440,15 +430,13 @@ class Pico(nn.Module):
     def __init__(
         self,
         model_config: Union["ModelConfig", "PicoHFConfig"],
-        fabric: Optional["L.Fabric"] = None,
     ):
         super().__init__()
         self.config = model_config
-        self.fabric = fabric
 
         self.embedding_proj = nn.Embedding(self.config.vocab_size, self.config.d_model)
         self.layers = nn.ModuleList(
-            [PicoBlock(self.config, self.fabric) for _ in range(self.config.n_layers)]
+            [PicoBlock(self.config) for _ in range(self.config.n_layers)]
         )
         self.output_norm = RMSNorm(self.config)
         self.de_embedding_proj = nn.Linear(
@@ -500,20 +488,15 @@ class Pico(nn.Module):
         # Create causal mask for current sequence
         mask = None
         if seq_len > 1:
-            if self.fabric is not None:
-                mask = self.fabric.to_device(
-                    torch.full((seq_len, seq_len), float("-inf"))
-                )
-            else:
-                mask = torch.full((seq_len, seq_len), float("-inf"), device=h.device)
+            mask = torch.full((seq_len, seq_len), float("-inf"))
             mask = torch.triu(mask, diagonal=1)
 
             # If using KV cache, extend mask to cover cached sequence length
             if past_key_values is not None:
                 # Add zeros for cached tokens (we can attend to all of them)
-                mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask]).type_as(
-                    h
-                )
+                mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask])
+
+            mask = mask.to(h.device)
 
         # NOTE: If we are using the cache, we need to store the cached KV pairs for each layer
         #       in a tuple. Each layer will have its own cached KV pair which we aggregate in a tuple.
