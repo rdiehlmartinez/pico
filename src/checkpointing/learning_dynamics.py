@@ -278,7 +278,7 @@ def compute_learning_dynamics_states(
     )
 
     # Create a new model instance with same parameters but zero gradients
-    _model = Pico(model.config, fabric=fabric)
+    _model = Pico(model.config)
     _model.load_state_dict(model.state_dict())
 
     if isinstance(fabric.strategy, DeepSpeedStrategy):

@@ -496,7 +496,7 @@ class Pico(nn.Module):
                 # Add zeros for cached tokens (we can attend to all of them)
                 mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask])
 
-            mask = mask.to(h.dtype)
+            mask = mask.to(h.device)
 
         # NOTE: If we are using the cache, we need to store the cached KV pairs for each layer
         #       in a tuple. Each layer will have its own cached KV pair which we aggregate in a tuple.
