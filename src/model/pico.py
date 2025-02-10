@@ -312,12 +312,12 @@ class Attention(nn.Module):
 
         backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
 
-        with sdpa_kernel(backends=backends):
+        with sdpa_kernel(backends=backends, set_priority=True):
             attn_output = F.scaled_dot_product_attention(
                 queries.contiguous(),
                 keys.contiguous(),
                 values.contiguous(),
-                attn_mask=mask,
+                attn_mask=mask.to(queries.dtype),
                 enable_gqa=apply_gqa,
             )
 
@@ -488,13 +488,15 @@ class Pico(nn.Module):
         # Create causal mask for current sequence
         mask = None
         if seq_len > 1:
-            mask = torch.full((seq_len, seq_len), float("-inf"), device=h.device)
+            mask = torch.full((seq_len, seq_len), float("-inf"))
             mask = torch.triu(mask, diagonal=1)
 
             # If using KV cache, extend mask to cover cached sequence length
             if past_key_values is not None:
                 # Add zeros for cached tokens (we can attend to all of them)
                 mask = torch.hstack([torch.zeros((seq_len, start_pos)), mask])
+
+            mask = mask.to(h.dtype)
 
         # NOTE: If we are using the cache, we need to store the cached KV pairs for each layer
         #       in a tuple. Each layer will have its own cached KV pair which we aggregate in a tuple.
