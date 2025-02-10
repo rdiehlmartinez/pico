@@ -297,19 +297,23 @@ class Attention(nn.Module):
             cached_keys = None
             cached_values = None
 
+        if self.n_rep > 1 and queries.device.type == "mps":
+            keys = keys.repeat_interleave(self.n_rep, dim=2)
+            values = values.repeat_interleave(self.n_rep, dim=2)
+
         queries = queries.transpose(1, 2)
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
 
         backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
 
-        with sdpa_kernel(backends=backends, set_priority=True):
+        with sdpa_kernel(backends=backends):
             attn_output = F.scaled_dot_product_attention(
                 queries.contiguous(),
                 keys.contiguous(),
                 values.contiguous(),
                 attn_mask=mask,
-                enable_gqa=True if self.n_rep > 1 else False,
+                enable_gqa=self.n_rep > 1,
             )
 
         attn_output = attn_output.transpose(1, 2).contiguous().view(bsz, seq_len, -1)
