@@ -301,13 +301,9 @@ class Attention(nn.Module):
         keys = keys.transpose(1, 2)
         values = values.transpose(1, 2)
 
-        # see if cuda available
-        if torch.cuda.is_available():
-            backend = SDPBackend.CUDNN_ATTENTION
-        else:
-            backend = SDPBackend.MATH
+        backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
 
-        with sdpa_kernel(backends=[backend]):
+        with sdpa_kernel(backends=backends, set_priority=True):
             attn_output = F.scaled_dot_product_attention(
                 queries.contiguous(),
                 keys.contiguous(),
