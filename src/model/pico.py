@@ -312,7 +312,7 @@ class Attention(nn.Module):
 
         backends = [SDPBackend.CUDNN_ATTENTION, SDPBackend.MATH]
 
-        with sdpa_kernel(backends=backends, set_priority=True):
+        with sdpa_kernel(backends=backends):
             attn_output = F.scaled_dot_product_attention(
                 queries.contiguous(),
                 keys.contiguous(),
