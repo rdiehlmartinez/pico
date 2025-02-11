@@ -12,6 +12,7 @@ import yaml
 from huggingface_hub import upload_folder, upload_file
 from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 from lightning.fabric.strategies import DeepSpeedStrategy
+from dataclasses import asdict
 
 
 # typing imports
@@ -206,8 +207,12 @@ def save_checkpoint(
         # Save config in fabric directory
         config_path = os.path.join(run_path, "training_config.yaml")
         if not os.path.exists(config_path):
+            # Converting dataclasses to joined dicts and saving to file
+            _training_config = {}
+            for config_name, config in configs.items():
+                _training_config[config_name] = asdict(config)
             with open(config_path, "w") as f:
-                yaml.dump(configs, f)
+                yaml.dump(_training_config, f)
 
         # Update latest symlink
         latest_symlink_path = os.path.join(root_checkpoint_path, "latest")
