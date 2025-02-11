@@ -624,6 +624,9 @@ def initialize_hf_checkpointing(
 
     repo = create_repo(huggingface_repo_id, exist_ok=True)
 
+    # can create a repo without a specified namespace (will default to username)
+    # however the rest of the HF calls need the fully qualified name
+    # this is returned by create repo, so we update the config for later calls
     checkpointing_config.save_checkpoint_repo_id = repo.repo_id
     huggingface_repo_id = repo.repo_id
 
