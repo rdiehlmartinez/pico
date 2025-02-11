@@ -17,7 +17,7 @@ import yaml
 from dataclasses import fields, is_dataclass
 from datetime import datetime
 import wandb
-from huggingface_hub import create_repo, create_branch
+from huggingface_hub import add_collection_item, create_repo, create_branch
 from wandb.integration.lightning.fabric import WandbLogger
 from datasets import load_dataset, Dataset, DownloadConfig
 from torch.utils.data import DataLoader
@@ -622,7 +622,18 @@ def initialize_hf_checkpointing(
     huggingface_repo_id = checkpointing_config.save_checkpoint_repo_id
     assert huggingface_repo_id is not None, "save_checkpoint_repo_id must be provided."
 
-    create_repo(huggingface_repo_id, exist_ok=True)
+    repo = create_repo(huggingface_repo_id, exist_ok=True)
+
+    checkpointing_config.save_checkpoint_repo_id = repo.repo_id
+    huggingface_repo_id = repo.repo_id
+
+    if checkpointing_config.hf_collection_slug:
+        add_collection_item(
+            checkpointing_config.hf_collection_slug,
+            huggingface_repo_id,
+            repo.repo_type,
+            exists_ok=True,
+        )
 
     create_branch(
         repo_id=huggingface_repo_id,
