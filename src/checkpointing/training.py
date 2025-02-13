@@ -14,6 +14,7 @@ from lightning.fabric.utilities.seed import _collect_rng_states, _set_rng_states
 from lightning.fabric.strategies import DeepSpeedStrategy
 from dataclasses import asdict
 
+from src.training.utils.io import use_backoff
 
 # typing imports
 from torch.optim import Optimizer
@@ -25,6 +26,7 @@ from src.config import CheckpointingConfig
 from typing import Dict, Any, Union, Tuple
 
 
+@use_backoff()
 def load_checkpoint(
     checkpointing_config: CheckpointingConfig,
     checkpoint_step: Union[str, int],
@@ -92,6 +94,7 @@ def load_checkpoint(
     return model, optimizer, lr_scheduler, checkpoint_step
 
 
+@use_backoff()
 def save_checkpoint(
     configs: Dict[str, Any],
     checkpoint_step: int,

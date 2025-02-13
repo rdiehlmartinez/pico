@@ -7,6 +7,7 @@ We save the evaluation results in a JSON file at the step-specific evaluation re
 import os
 import json
 from huggingface_hub import upload_folder
+from src.training.utils.io import use_backoff
 
 # typing imports
 from typing import Dict, Any
@@ -14,6 +15,7 @@ from src.config import CheckpointingConfig
 from lightning.fabric import Fabric
 
 
+@use_backoff()
 def save_evaluation_results(
     checkpointing_config: CheckpointingConfig,
     checkpoint_step: int,

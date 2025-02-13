@@ -16,6 +16,8 @@ import deepspeed
 
 from src.model import Pico
 
+from src.training.utils.io import use_backoff
+
 # typing imports
 import torch.nn as nn
 from typing import Dict, Optional
@@ -330,6 +332,7 @@ def compute_learning_dynamics_states(
     }
 
 
+@use_backoff()
 def save_learning_dynamics_states(
     checkpointing_config: CheckpointingConfig,
     checkpoint_step: int,

@@ -37,6 +37,7 @@ from src.config import (
 
 from lightning.fabric.loggers import Logger as FabricLogger
 
+from src.training.utils.io import use_backoff
 
 warnings.filterwarnings(
     "ignore",
@@ -216,6 +217,7 @@ def initialize_fabric(
 ########################################################
 
 
+@use_backoff(max_retries=20)
 def initialize_dataset(
     data_config: DataConfig,
     fabric: L.Fabric,
@@ -227,7 +229,7 @@ def initialize_dataset(
     This function will return a dataset object, and optionally a fast_forward_steps value.
 
     The fast_forward_steps value is the number of steps that we need to fast-forward an iterator by,
-    so that we can continue from a certain batch of data we would have seen had training not previously
+    so that we can continue from a ertain batch of data we would have seen had training not previously
     stopped. Depending on how the dataset is loaded, the amount of steps to fast-forward may be
     different from the initial_batch_step value.
 
@@ -248,7 +250,7 @@ def initialize_dataset(
     datasets_config.STREAMING_READ_MAX_RETRIES = 40  # default is 20
     datasets_config.STREAMING_READ_RETRY_INTERVAL = 10  # default is 5
     download_config = DownloadConfig(
-        max_retries=10,  # default is 1 and can lead to pre-mature HTTPS errors
+        max_retries=20,  # default is 1 and can lead to pre-mature HTTPS errors
     )
 
     fast_forward_steps = 0
@@ -496,6 +498,7 @@ def _initialize_log_file(checkpointing_config: CheckpointingConfig) -> str:
     return log_file_path
 
 
+@use_backoff()
 def initialize_experiment_tracker(
     monitoring_config: MonitoringConfig, checkpointing_config: CheckpointingConfig
 ):
@@ -604,6 +607,7 @@ def initialize_logging(
 ########################################################
 
 
+@use_backoff()
 def initialize_hf_checkpointing(
     checkpointing_config: CheckpointingConfig, fabric: L.Fabric
 ):
